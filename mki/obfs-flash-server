@@ -1,7 +1,7 @@
 #!/bin/bash
 
-WEBSOCKET_SERVER=websocket-server
-OBFSPROXY=obfsproxy
+WEBSOCKET_SERVER=/usr/local/bin/websocket-server
+OBFSPROXY=/usr/local/bin/obfsproxy
 
 # obfsproxy listens locally on this port and websocket-client connects to it as
 # if it were an ORPort.
