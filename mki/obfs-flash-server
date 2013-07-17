@@ -32,26 +32,20 @@ BINDADDR=$(echo "$TOR_PT_SERVER_BINDADDR" | sed -e 's/.*-//')
 
 trap 'kill $(jobs -pr)' SIGINT SIGTERM EXIT
 
-if ! env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
 	TOR_PT_EXTENDED_SERVER_PORT="" \
 	TOR_PT_ORPORT="$TOR_PT_ORPORT" \
 	TOR_PT_SERVER_TRANSPORTS=obfs3 \
 	TOR_PT_SERVER_BINDADDR="obfs3-127.0.0.1:$MID_PORT" \
-	"$OBFSPROXY" managed > /dev/null & then
-	echo SMETHOD_ERROR running obfsproxy
-	exit 1
-fi
+	"$OBFSPROXY" managed > /dev/null &
 
-if ! env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
 	TOR_PT_ORPORT="127.0.0.1:$MID_PORT" \
 	TOR_PT_SERVER_TRANSPORTS=websocket \
 	TOR_PT_SERVER_BINDADDR="websocket-$BINDADDR" \
-	"$WEBSOCKET_SERVER" > /dev/null & then
-	echo SMETHOD_ERROR running websocket-server
-	exit 1
-fi
+	"$WEBSOCKET_SERVER" > /dev/null &
 
 echo SMETHOD obfs3_flash $BINDADDR
 

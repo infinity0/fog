@@ -21,22 +21,16 @@ fi
 
 trap 'kill $(jobs -pr)' SIGINT SIGTERM EXIT
 
-if ! env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
 	TOR_PT_CLIENT_TRANSPORTS=websocket \
-	"$FLASHPROXY_CLIENT" --register ":$FLASHPROXY_LOCAL_PORT" ":$FLASHPROXY_REMOTE_PORT" > /dev/null & then
-	echo CMETHOD_ERROR running obfsproxy
-	exit 1
-fi
+	"$FLASHPROXY_CLIENT" --register ":$FLASHPROXY_LOCAL_PORT" ":$FLASHPROXY_REMOTE_PORT" > /dev/null &
 
 socat "TCP-LISTEN:$MID_PORT" "SOCKS4A:127.0.0.1:0.0.1.0:1,socksport=$FLASHPROXY_LOCAL_PORT" > /dev/null &
 
-if ! env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
 	TOR_PT_CLIENT_TRANSPORTS=obfs3 \
-	"$OBFSPROXY" managed | awk '/^CMETHOD / {print $1 " obfs3_flash " $3 " " $4}' & then
-	echo CMETHOD_ERROR running obfsproxy
-	exit 1
-fi
+	"$OBFSPROXY" managed | awk '/^CMETHOD / {print $1 " obfs3_flash " $3 " " $4}' &
 
 wait %%
