@@ -1,0 +1,42 @@
+#!/bin/bash
+
+OBFSPROXY=obfsproxy
+FLASHPROXY_CLIENT=flashproxy-client
+FLASHPROXY_LOCAL_PORT=9001
+FLASHPROXY_REMOTE_PORT=9000
+
+# The socat SOCKS shim listens on this local port.
+MID_PORT=2334
+
+if [ "$TOR_PT_MANAGED_TRANSPORT_VER" != "1" ]; then
+	echo VERSION-ERROR no-version
+	exit 1
+fi
+echo VERSION 1
+
+if [ "$TOR_PT_CLIENT_TRANSPORTS" != "obfs3_flash" -a "$TOR_PT_CLIENT_TRANSPORTS" != "*" ]; then
+	echo CMETHODS DONE
+	exit 1
+fi
+
+trap 'kill $(jobs -pr)' SIGINT SIGTERM EXIT
+
+if ! env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
+	TOR_PT_CLIENT_TRANSPORTS=websocket \
+	"$FLASHPROXY_CLIENT" --register ":$FLASHPROXY_LOCAL_PORT" ":$FLASHPROXY_REMOTE_PORT" > /dev/null & then
+	echo CMETHOD_ERROR running obfsproxy
+	exit 1
+fi
+
+socat "TCP-LISTEN:$MID_PORT" "SOCKS4A:127.0.0.1:0.0.1.0:1,socksport=$FLASHPROXY_LOCAL_PORT" > /dev/null &
+
+if ! env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
+	TOR_PT_CLIENT_TRANSPORTS=obfs3 \
+	"$OBFSPROXY" managed | awk '/^CMETHOD / {print $1 " obfs3_flash " $3 " " $4}' & then
+	echo CMETHOD_ERROR running obfsproxy
+	exit 1
+fi
+
+wait %%
