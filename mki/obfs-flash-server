@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Usage: Put this in torrc:
+# ServerTransportPlugin obfs3_flash exec /usr/local/bin/obfs-flash-server
+
 WEBSOCKET_SERVER=/usr/local/bin/websocket-server
 OBFSPROXY=/usr/local/bin/obfsproxy
 

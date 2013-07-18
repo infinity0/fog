@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Usage: Open $FLASHPROXY_REMOTE_PORT, then run
+# tor -f torrc
+
 OBFSPROXY=/usr/local/bin/obfsproxy
 FLASHPROXY_CLIENT=/usr/local/bin/flashproxy-client
 FLASHPROXY_LOCAL_PORT=9001
