@@ -48,6 +48,6 @@ env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_ORPORT="127.0.0.1:$MID_PORT" \
 	TOR_PT_SERVER_TRANSPORTS=websocket \
 	TOR_PT_SERVER_BINDADDR="websocket-$BINDADDR" \
-	"$WEBSOCKET_SERVER" | awk '/^SMETHOD / {print $1 " obfs3_flash " $3; print "SMETHODS DONE"; fflush();}' &
+	"$WEBSOCKET_SERVER" | gawk '/^SMETHOD / {print $1 " obfs3_flash " $3; print "SMETHODS DONE"; fflush();}' &
 
 wait %%
