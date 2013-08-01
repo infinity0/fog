@@ -3,10 +3,10 @@
 # Usage: Open $FLASHPROXY_REMOTE_PORT, then run
 # tor -f torrc
 
-OBFSPROXY=/usr/local/bin/obfsproxy
-FLASHPROXY_CLIENT=/usr/local/bin/flashproxy-client
-FLASHPROXY_LOCAL_PORT=9001
-FLASHPROXY_REMOTE_PORT=9000
+: ${OBFSPROXY:=obfsproxy}
+: ${FLASHPROXY_CLIENT:=flashproxy-client}
+: ${FLASHPROXY_LOCAL_PORT:=9001}
+: ${FLASHPROXY_REMOTE_PORT:=9000}
 
 # The socat SOCKS shim listens on this local port.
 MID_PORT=2334
@@ -24,14 +24,14 @@ fi
 
 trap 'kill $(jobs -pr)' SIGINT SIGTERM EXIT
 
-env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+env TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
 	TOR_PT_CLIENT_TRANSPORTS=websocket \
 	"$FLASHPROXY_CLIENT" ":$FLASHPROXY_LOCAL_PORT" ":$FLASHPROXY_REMOTE_PORT" > /dev/null &
 
-socat "TCP-LISTEN:$MID_PORT,reuseaddr,fork" "SOCKS4A:127.0.0.1:0.0.1.0:1,socksport=$FLASHPROXY_LOCAL_PORT" > /dev/null &
+socat "TCP-LISTEN:$MID_PORT,reuseaddr,fork,bind=127.0.0.1" "SOCKS4A:127.0.0.1:0.0.1.0:1,socksport=$FLASHPROXY_LOCAL_PORT" > /dev/null &
 
-env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+env TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
 	TOR_PT_CLIENT_TRANSPORTS=obfs3 \
 	"$OBFSPROXY" managed | gawk '/^CMETHOD / {print $1 " obfs3_flash " $3 " " $4; print "CMETHODS DONE"; fflush();}' &
