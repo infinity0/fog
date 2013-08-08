@@ -18,8 +18,6 @@ PT_METHOD_NAME = "obfs3_flash"
 WEBSOCKET_SERVER = "websocket-server"
 OBFSPROXY = "obfsproxy"
 
-DEFAULT_MID_PORT = 2333
-
 def usage(f=sys.stdout):
     print >> f, """\
 Usage: %(progname)s [OPTIONS]
@@ -27,29 +25,24 @@ Chains websocket-server and obfsproxy transports. websocket-server and
 obfsproxy must be in PATH.
 
   -h, --help          show this help.
-  -l, --log FILENAME  log to FILENAME (default stderr).
-  --mid-port PORT     intermediate port between programs is PORT
-                        (default %(mid_port)d).\
-""" % {"progname": sys.argv[0], "mid_port": DEFAULT_MID_PORT}
+  -l, --log FILENAME  log to FILENAME (default stderr).\
+""" % {"progname": sys.argv[0]}
 
 class options(object):
     log_filename = None
     log_file = sys.stderr
-    mid_port = DEFAULT_MID_PORT
 
 def log(msg):
     print >> options.log_file, msg
     options.log_file.flush()
 
-opts, args = getopt.gnu_getopt(sys.argv[1:], "hl:", ["help", "log=", "mid-port="])
+opts, args = getopt.gnu_getopt(sys.argv[1:], "hl:", ["help", "log="])
 for o, a in opts:
     if o == "-h" or o == "--help":
         usage()
         sys.exit()
     elif o == "-l" or o == "--log":
         options.log_filename = a
-    elif o == "--mid-port":
-        options.mid_port = int(a)
 
 if len(args) != 0:
     usage(sys.stderr)
@@ -79,18 +72,19 @@ if info["transports"].keys() != [PT_METHOD_NAME]:
     sys.exit()
 
 bindaddr = info["transports"][PT_METHOD_NAME]
-# external_bindaddr is learned through transport negotiation.
+# mid_bindaddr and external_bindaddr are learned through transport negotiation.
+mid_bindaddr = None
 external_bindaddr = None
 procs = []
 
-# obfsproxy talks directly to the real ORPort and listens on mid_port.
+# obfsproxy talks directly to the real ORPort and listens on mid_bindaddr.
 env = {
     "TOR_PT_MANAGED_TRANSPORT_VER": "1",
     "TOR_PT_STATE_LOCATION": os.environ.get("TOR_PT_STATE_LOCATION"),
     "TOR_PT_EXTENDED_SERVER_PORT": "",
     "TOR_PT_ORPORT": os.environ.get("TOR_PT_ORPORT"),
     "TOR_PT_SERVER_TRANSPORTS": "obfs3",
-    "TOR_PT_SERVER_BINDADDR": "obfs3-127.0.0.1:%d" % options.mid_port,
+    "TOR_PT_SERVER_BINDADDR": "obfs3-127.0.0.1:0",
     "PATH": os.environ.get("PATH"),
 }
 log("obfsproxy environment: %r." % env)
@@ -105,14 +99,24 @@ while True:
     line = proc.stdout.readline()
     log("received from obfsproxy: %r." % line)
     keyword, rest = line.strip().split(None, 1)
-    if (keyword, rest) == ("SMETHODS", "DONE"):
+    if keyword == "SMETHOD":
+        # This is the address that the transport ended up listening on.
+        args = rest.split()
+        if len(args) == 2 and args[0] == "obfs3":
+            mid_bindaddr = pyptlib.util.parse_addr_spec(args[1])
+    elif (keyword, rest) == ("SMETHODS", "DONE"):
         break
 
-# websocket-server talks to mid_port and listens on bindaddr.
+if mid_bindaddr is None:
+    log("No obfsproxy SMETHOD found.")
+    pyptlib.server.reportFailure(PT_METHOD_NAME, "No obfsproxy SMETHOD found")
+    sys.exit(1)
+
+# websocket-server talks to mid_bindaddr and listens on bindaddr.
 env = {
     "TOR_PT_MANAGED_TRANSPORT_VER": "1",
     "TOR_PT_STATE_LOCATION": os.environ.get("TOR_PT_STATE_LOCATION"),
-    "TOR_PT_ORPORT": "127.0.0.1:%d" % options.mid_port,
+    "TOR_PT_ORPORT": "%s:%d" % mid_bindaddr,
     "TOR_PT_SERVER_TRANSPORTS": "websocket",
     "TOR_PT_SERVER_BINDADDR": "websocket-%s:%d" % bindaddr,
     "PATH": os.environ.get("PATH"),
@@ -138,8 +142,8 @@ while True:
         break
 
 if external_bindaddr is None:
-    log("No SMETHOD found.")
-    pyptlib.server.reportFailure(PT_METHOD_NAME, "No SMETHOD found")
+    log("No websocket-server SMETHOD found.")
+    pyptlib.server.reportFailure(PT_METHOD_NAME, "No websocket-server SMETHOD found")
     sys.exit(1)
 
 pyptlib.server.reportSuccess(PT_METHOD_NAME, external_bindaddr, None)
