@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Usage: Put this in torrc:
-# ServerTransportPlugin obfs3_flash exec /usr/local/bin/obfs-flash-server
+# ServerTransportPlugin obfs3_flash exec /path/to/obfs-flash-server
 
-WEBSOCKET_SERVER=/usr/local/bin/websocket-server
-OBFSPROXY=/usr/local/bin/obfsproxy
+: ${WEBSOCKET_SERVER:=websocket-server}
+: ${OBFSPROXY:=obfsproxy}
 
 # obfsproxy listens locally on this port and websocket-client connects to it as
 # if it were an ORPort.
@@ -35,7 +35,7 @@ BINDADDR=$(echo "$TOR_PT_SERVER_BINDADDR" | sed -e 's/.*-//')
 
 trap 'kill $(jobs -pr)' SIGINT SIGTERM EXIT
 
-env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+env TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
 	TOR_PT_EXTENDED_SERVER_PORT="" \
 	TOR_PT_ORPORT="$TOR_PT_ORPORT" \
@@ -43,7 +43,7 @@ env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_SERVER_BINDADDR="obfs3-127.0.0.1:$MID_PORT" \
 	"$OBFSPROXY" managed > /dev/null &
 
-env -i TOR_PT_MANAGED_TRANSPORT_VER=1 \
+env TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_STATE_LOCATION="$TOR_PT_STATE_LOCATION" \
 	TOR_PT_ORPORT="127.0.0.1:$MID_PORT" \
 	TOR_PT_SERVER_TRANSPORTS=websocket \
