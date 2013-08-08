@@ -1,1 +1,5 @@
-../mki/torrc
+UseBridges 1
+Bridge obfs3_flash 127.0.0.1:2334
+LearnCircuitBuildTimeout 0
+CircuitBuildTimeout 300
+ClientTransportPlugin obfs3_flash exec ./obfs-flash-client
