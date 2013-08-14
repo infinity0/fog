@@ -7,8 +7,8 @@ import time
 from pyptlib.util.subproc import auto_killall, Popen, SINK
 from pyptlib.client import ClientTransportPlugin
 from subprocess import PIPE
-
-auto_killall(1)
+from twisted.internet import stdio
+from twisted.protocols import basic
 
 def pt_child_env(env, managed_ver):
     """
@@ -21,56 +21,81 @@ def pt_child_env(env, managed_ver):
     cur_env.append(('TOR_PT_MANAGED_TRANSPORT_VER', ','.join(managed_ver)))
     return cur_env
 
-ob_client = os.getenv("OBFSPROXY", "obfsproxy")
-fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
-fp_local_port = int(os.getenv("FLASHPROXY_LOCAL_PORT", 9001))
-fp_remote_port = int(os.getenv("FLASHPROXY_REMOTE_PORT", 9000))
-mid_port = 2334
+class PTInterceptor(basic.LineReceiver):
+    """
+    A Twisted IProtocol to read PT output.
 
-client = ClientTransportPlugin.fromEnv()
-client.init(['obfs3_flash'])
-cur_env = pt_child_env(os.environ, client.config.getManagedTransportVersions())
+    See 180-pluggable-transport.txt and others for details of the protocol.
 
-fp_proc = Popen(
-    [fp_client, ":%s" % fp_local_port, ":%s" % fp_remote_port],
-    stdout = SINK,
-    env = dict(cur_env + {
-        "TOR_PT_CLIENT_TRANSPORTS": "websocket",
-    }.items()),
-    )
+    Note: all response output goes via the client rather than sendLine().
+    """
+    # TODO(infinity0): pad this out and move to pyptlib
 
-mid_proc = Popen(
-    ["socat",
-     "TCP-LISTEN:%s,reuseaddr,fork,bind=127.0.0.1" % mid_port,
-     "SOCKS4A:127.0.0.1:0.0.1.0:1,socksport=%s" % fp_local_port],
-    stdout = SINK,
-    )
+    delimiter = os.linesep
 
-ob_proc = Popen(
-    [ob_client, "managed"],
-    stdout = PIPE,
-    env = dict(cur_env + {
-        "TOR_PT_CLIENT_TRANSPORTS": "obfs3",
-    }.items()),
-    )
+    def __init__(self, client):
+        self.client = client
 
-while 1:
-    # readlines() has a stupid non-bypassable buffer which hangs everything
-    line = ob_proc.stdout.readline()
-    if not line: break
-    # TODO(infinity0): add read/parse utilities to pyptlib for this
-    (kw, args) = line.split(" ", 1)
-    if kw == "VERSION":
-        pass
-    elif kw == "CMETHOD" and args.startswith("obfs3 "):
-        (_, socks, addrstr) = args.split(" ", 2)
-        socksVer = socks[5:]
-        addrport = addrstr.split(":")
-        client.reportMethodSuccess("obfs3_flash", socksVer, addrport)
-    elif kw == "CMETHODS" and args == "DONE":
-        client.reportMethodsEnd()
-    else:
-        pass
-    sys.stdout.flush()
+    def lineReceived(self, line):
+        if not line: return
 
-ob_proc.wait()
+        (kw, args) = line.split(" ", 1)
+        if kw == "VERSION":
+            pass
+        elif kw == "CMETHOD" and args.startswith("obfs3 "):
+            (_, socks, addrstr) = args.split(" ", 2)
+            socksVer = socks[5:]
+            addrport = addrstr.split(":")
+            self.client.reportMethodSuccess("obfs3_flash", socksVer, addrport)
+        elif kw == "CMETHODS" and args == "DONE":
+            self.client.reportMethodsEnd()
+        else:
+            pass
+
+def main(*args):
+    # config
+    ob_client = os.getenv("OBFSPROXY", "obfsproxy")
+    fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
+    fp_local_port = int(os.getenv("FLASHPROXY_LOCAL_PORT", 9001))
+    fp_remote_port = int(os.getenv("FLASHPROXY_REMOTE_PORT", 9000))
+    mid_port = 2334
+
+    # runtime state
+    client = ClientTransportPlugin.fromEnv()
+    client.init(['obfs3_flash'])
+    cur_env = pt_child_env(os.environ, client.config.getManagedTransportVersions())
+
+    from twisted.internet import reactor
+    auto_killall(1, cleanup=lambda:reactor.stop())
+
+    fp_proc = Popen(
+        [fp_client, ":%s" % fp_local_port, ":%s" % fp_remote_port],
+        stdout = SINK,
+        env = dict(cur_env + {
+            "TOR_PT_CLIENT_TRANSPORTS": "websocket",
+        }.items()),
+        )
+
+    # TODO(infinity0): swap this out for an in-process twisted socks client
+    mid_proc = Popen(
+        ["socat",
+         "TCP-LISTEN:%s,reuseaddr,fork,bind=127.0.0.1" % mid_port,
+         "SOCKS4A:127.0.0.1:0.0.1.0:1,socksport=%s" % fp_local_port],
+        stdout = SINK,
+        )
+
+    ob_proc = Popen(
+        [ob_client, "managed"],
+        stdout = PIPE,
+        env = dict(cur_env + {
+            "TOR_PT_CLIENT_TRANSPORTS": "obfs3",
+        }.items()),
+        )
+
+    stdio.StandardIO(PTInterceptor(client),
+        stdin=ob_proc.stdout.fileno(), reactor=reactor)
+    reactor.run(installSignalHandlers=0)
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
