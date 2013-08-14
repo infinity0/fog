@@ -10,6 +10,17 @@ from subprocess import PIPE
 
 auto_killall(1)
 
+def pt_child_env(env, managed_ver):
+    """
+    Prepare the environment for a child PT process, by clearing all TOR_PT_*
+    envvars except TOR_PT_STATE_LOCATION and TOR_PT_MANAGED_TRANSPORT_VER.
+    """
+    exempt = ['TOR_PT_STATE_LOCATION']
+    cur_env = [(k, v) for k, v in env.iteritems()
+                      if not k.startswith('TOR_PT_') or k in exempt]
+    cur_env.append(('TOR_PT_MANAGED_TRANSPORT_VER', ','.join(managed_ver)))
+    return cur_env
+
 ob_client = os.getenv("OBFSPROXY", "obfsproxy")
 fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
 fp_local_port = int(os.getenv("FLASHPROXY_LOCAL_PORT", 9001))
@@ -18,16 +29,12 @@ mid_port = 2334
 
 client = ClientTransportPlugin.fromEnv()
 client.init(['obfs3_flash'])
-managed_ver = ','.join(client.config.getManagedTransportVersions())
-
-cur_env = os.environ.items()
+cur_env = pt_child_env(os.environ, client.config.getManagedTransportVersions())
 
 fp_proc = Popen(
     [fp_client, ":%s" % fp_local_port, ":%s" % fp_remote_port],
     stdout = SINK,
     env = dict(cur_env + {
-        "TOR_PT_MANAGED_TRANSPORT_VER": managed_ver,
-        #"TOR_PT_STATE_LOCATION": same,
         "TOR_PT_CLIENT_TRANSPORTS": "websocket",
     }.items()),
     )
@@ -43,8 +50,6 @@ ob_proc = Popen(
     [ob_client, "managed"],
     stdout = PIPE,
     env = dict(cur_env + {
-        "TOR_PT_MANAGED_TRANSPORT_VER": managed_ver,
-        #"TOR_PT_STATE_LOCATION": same,
         "TOR_PT_CLIENT_TRANSPORTS": "obfs3",
     }.items()),
     )
