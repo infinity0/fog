@@ -1,0 +1,3 @@
+ORPort 9001
+SocksPort 0
+ServerTransportPlugin obfs3_flash exec ./obfs-flash-server
