@@ -32,6 +32,7 @@ func usage() {
 	fmt.Printf("\n")
 	fmt.Printf("  -h, --help   show this help.\n")
 	fmt.Printf("  --log FILE   log messages to FILE (default stderr).\n")
+	fmt.Printf("  --port PORT  listen on PORT (overrides Tor's requested port).\n")
 }
 
 var logMutex sync.Mutex
@@ -156,9 +157,11 @@ func startChain(bindAddr *net.TCPAddr) (*net.TCPAddr, error) {
 
 func main() {
 	var logFilename string
+	var port int
 
 	flag.Usage = usage
 	flag.StringVar(&logFilename, "log", "", "log file to write to")
+	flag.IntVar(&port, "port", 0, "port to listen on if unspecified by Tor")
 	flag.Parse()
 
 	if logFilename != "" {
@@ -174,6 +177,13 @@ func main() {
 	ptInfo = pt.ServerSetup([]string{ptMethodName})
 
 	for _, bindAddr := range ptInfo.BindAddrs {
+		// Override tor's requested port (which is 0 if this transport
+		// has not been run before) with the one requested by the --port
+		// option.
+		if port != 0 {
+			bindAddr.Addr.Port = port
+		}
+
 		addr, err := startChain(bindAddr.Addr)
 		if err != nil {
 			pt.SmethodError(bindAddr.MethodName, err.Error())
