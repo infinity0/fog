@@ -10,7 +10,12 @@ from pyptlib.client import ClientTransportPlugin
 from subprocess import PIPE
 
 from twisted.internet import stdio
+from twisted.internet.protocol import Factory
+from twisted.internet.endpoints import TCP4ClientEndpoint
 from twisted.protocols.basic import LineReceiver
+from twisted.protocols.portforward import ProxyServer as _ProxyServer
+from twisted.python import log
+from txsocksx.client import SOCKS4ClientEndpoint
 
 def pt_child_env(env, managed_ver):
     """
@@ -54,6 +59,51 @@ class PTInterceptor(LineReceiver):
         else:
             pass
 
+# TODO(infinity0): remove this class when twisted update their side
+class ProxyServer(_ProxyServer):
+
+    def connectionMade(self):
+        # code copied from super class, except instead of connecting
+        # to a TCP endpoint we abstract that out to a child method
+        self.transport.pauseProducing()
+
+        client = self.clientProtocolFactory()
+        client.setServer(self)
+
+        if self.reactor is None:
+            from twisted.internet import reactor
+            self.reactor = reactor
+
+        self.connectProxyClient(client)
+
+    def connectProxyClient(self, client):
+        raise NotImplementedError()
+
+class SOCKS4Wrapper(ProxyServer):
+
+    def connectProxyClient(self, client):
+        TCPPoint = TCP4ClientEndpoint(
+            self.reactor,
+            self.factory.local_host,
+            self.factory.local_port)
+        SOCKSPoint = SOCKS4ClientEndpoint(
+            self.factory.remote_host,
+            self.factory.remote_port,
+            TCPPoint)
+        d = SOCKSPoint.connect(client)
+        @d.addErrback
+        def _gotError(error):
+            log.err(error, "error connecting to SOCKS server")
+
+class SOCKS4WrapperFactory(Factory):
+    protocol = SOCKS4Wrapper
+
+    def __init__(self, local_host, local_port, remote_host, remote_port):
+        self.local_host = local_host
+        self.local_port = local_port
+        self.remote_host = remote_host
+        self.remote_port = remote_port
+
 def main(*args):
     # config
     ob_client = os.getenv("OBFSPROXY", "obfsproxy")
@@ -78,13 +128,8 @@ def main(*args):
         }.items()),
         )
 
-    # TODO(infinity0): swap this out for an in-process twisted socks client
-    mid_proc = Popen(
-        ["socat",
-         "TCP-LISTEN:%s,reuseaddr,fork,bind=127.0.0.1" % mid_port,
-         "SOCKS4A:127.0.0.1:0.0.1.0:1,socksport=%s" % fp_local_port],
-        stdout = SINK,
-        )
+    reactor.listenTCP(interface='127.0.0.1', port=mid_port, factory=
+        SOCKS4WrapperFactory('127.0.0.1', fp_local_port, '0.0.1.0', 1))
 
     ob_proc = Popen(
         [ob_client, "managed"],
@@ -96,6 +141,7 @@ def main(*args):
 
     stdio.StandardIO(PTInterceptor(client),
         stdin=ob_proc.stdout.fileno(), reactor=reactor)
+
     reactor.run(installSignalHandlers=0)
     return 0
 
