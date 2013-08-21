@@ -9,7 +9,7 @@ from pyptlib.client import ClientTransportPlugin
 
 from subprocess import PIPE
 
-from twisted.internet import stdio
+from twisted.internet.stdio import StandardIO
 from twisted.internet.protocol import Factory
 from twisted.internet.endpoints import TCP4ClientEndpoint
 from twisted.protocols.basic import LineReceiver
@@ -17,7 +17,7 @@ from twisted.protocols.portforward import ProxyServer as _ProxyServer
 from twisted.python import log
 from txsocksx.client import SOCKS4ClientEndpoint
 
-def pt_child_env(env, managed_ver):
+def pt_child_env(managed_ver, env=os.environ):
     """
     Prepare the environment for a child PT process, by clearing all TOR_PT_*
     envvars except TOR_PT_STATE_LOCATION and TOR_PT_MANAGED_TRANSPORT_VER.
@@ -53,6 +53,9 @@ class PTInterceptor(LineReceiver):
             (_, socks, addrstr) = args.split(" ", 2)
             socksVer = socks[5:]
             addrport = addrstr.split(":")
+            # TODO(infinity0): properly, we ought to wait until all child processes
+            # respond with CMETHODS DONE, before sending CMETHOD obfs3_flash ourselves
+            # (and subsequently CMETHODS DONE too).
             self.client.reportMethodSuccess("obfs3_flash", socksVer, addrport)
         elif kw == "CMETHODS" and args == "DONE":
             self.client.reportMethodsEnd()
@@ -104,32 +107,32 @@ class SOCKS4WrapperFactory(Factory):
         self.remote_host = remote_host
         self.remote_port = remote_port
 
-def main(*args):
-    # config
+def obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out):
+    """
+    Set up the obfs3_flash combined PT.
+
+    :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
+    :param pyptlib.client.ClientTransportPlugin client: PT client API.
+    :param int fp_local: Listen port for outgoing flashproxy connections.
+    :param int fp_remote: Listen port for incoming flashproxy connections.
+    :param int obfs_out: Listen port for obfsproxy to connect to.
+    """
+    # TODO(infinity0): have this return a Deferred that indicates success/failure
     ob_client = os.getenv("OBFSPROXY", "obfsproxy")
     fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
-    fp_local_port = int(os.getenv("FLASHPROXY_LOCAL_PORT", 9001))
-    fp_remote_port = int(os.getenv("FLASHPROXY_REMOTE_PORT", 9000))
-    mid_port = 2334
 
-    # runtime state
-    client = ClientTransportPlugin.fromEnv()
-    client.init(['obfs3_flash'])
-    cur_env = pt_child_env(os.environ, client.config.getManagedTransportVersions())
-
-    from twisted.internet import reactor
-    auto_killall(1, cleanup=lambda:reactor.stop())
+    cur_env = pt_child_env(client.config.getManagedTransportVersions())
 
     fp_proc = Popen(
-        [fp_client, ":%s" % fp_local_port, ":%s" % fp_remote_port],
+        [fp_client, ":%s" % fp_local, ":%s" % fp_remote],
         stdout = SINK,
         env = dict(cur_env + {
             "TOR_PT_CLIENT_TRANSPORTS": "websocket",
         }.items()),
         )
 
-    reactor.listenTCP(interface='127.0.0.1', port=mid_port, factory=
-        SOCKS4WrapperFactory('127.0.0.1', fp_local_port, '0.0.1.0', 1))
+    reactor.listenTCP(interface='127.0.0.1', port=obfs_out, factory=
+        SOCKS4WrapperFactory('127.0.0.1', fp_local, '0.0.1.0', 1))
 
     ob_proc = Popen(
         [ob_client, "managed"],
@@ -139,9 +142,25 @@ def main(*args):
         }.items()),
         )
 
-    stdio.StandardIO(PTInterceptor(client),
+    StandardIO(PTInterceptor(client),
         stdin=ob_proc.stdout.fileno(), reactor=reactor)
 
+def main(*args):
+    # config
+    fp_local = int(os.getenv("FLASHPROXY_LOCAL_PORT", 9001))
+    fp_remote = int(os.getenv("FLASHPROXY_REMOTE_PORT", 9000))
+    obfs_out = 2334
+
+    # runtime state
+    client = ClientTransportPlugin()
+    client.init(['obfs3_flash'])
+    if not client.getServedTransports():
+        print >>sys.stderr, "no transports to serve"
+        return 1
+
+    from twisted.internet import reactor
+    auto_killall(1, cleanup=lambda:reactor.stop())
+    obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out)
     reactor.run(installSignalHandlers=0)
     return 0
 
