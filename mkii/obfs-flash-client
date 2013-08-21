@@ -6,9 +6,11 @@ import time
 
 from pyptlib.util.subproc import auto_killall, Popen, SINK
 from pyptlib.client import ClientTransportPlugin
+
 from subprocess import PIPE
+
 from twisted.internet import stdio
-from twisted.protocols import basic
+from twisted.protocols.basic import LineReceiver
 
 def pt_child_env(env, managed_ver):
     """
@@ -21,13 +23,13 @@ def pt_child_env(env, managed_ver):
     cur_env.append(('TOR_PT_MANAGED_TRANSPORT_VER', ','.join(managed_ver)))
     return cur_env
 
-class PTInterceptor(basic.LineReceiver):
+class PTInterceptor(LineReceiver):
     """
     A Twisted IProtocol to read PT output.
 
-    See 180-pluggable-transport.txt and others for details of the protocol.
+    See pt-spec.txt and others for details of the protocol.
 
-    Note: all response output goes via the client rather than sendLine().
+    Note: all output goes via the PT client rather than sendLine().
     """
     # TODO(infinity0): pad this out and move to pyptlib
 
