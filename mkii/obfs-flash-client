@@ -6,11 +6,18 @@ import time
 
 from pyptlib.util.subproc import auto_killall, Popen, SINK
 from pyptlib.client import ClientTransportPlugin
-from subprocess import PIPE
-from twisted.internet import stdio
-from twisted.protocols import basic
 
-def pt_child_env(env, managed_ver):
+from subprocess import PIPE
+
+from twisted.internet.stdio import StandardIO
+from twisted.internet.protocol import Factory
+from twisted.internet.endpoints import TCP4ClientEndpoint
+from twisted.protocols.basic import LineReceiver
+from twisted.protocols.portforward import ProxyServer as _ProxyServer
+from twisted.python import log
+from txsocksx.client import SOCKS4ClientEndpoint
+
+def pt_child_env(managed_ver, env=os.environ):
     """
     Prepare the environment for a child PT process, by clearing all TOR_PT_*
     envvars except TOR_PT_STATE_LOCATION and TOR_PT_MANAGED_TRANSPORT_VER.
@@ -21,13 +28,13 @@ def pt_child_env(env, managed_ver):
     cur_env.append(('TOR_PT_MANAGED_TRANSPORT_VER', ','.join(managed_ver)))
     return cur_env
 
-class PTInterceptor(basic.LineReceiver):
+class PTInterceptor(LineReceiver):
     """
     A Twisted IProtocol to read PT output.
 
-    See 180-pluggable-transport.txt and others for details of the protocol.
+    See pt-spec.txt and others for details of the protocol.
 
-    Note: all response output goes via the client rather than sendLine().
+    Note: all output goes via the PT client rather than sendLine().
     """
     # TODO(infinity0): pad this out and move to pyptlib
 
@@ -46,43 +53,86 @@ class PTInterceptor(basic.LineReceiver):
             (_, socks, addrstr) = args.split(" ", 2)
             socksVer = socks[5:]
             addrport = addrstr.split(":")
+            # TODO(infinity0): properly, we ought to wait until all child processes
+            # respond with CMETHODS DONE, before sending CMETHOD obfs3_flash ourselves
+            # (and subsequently CMETHODS DONE too).
             self.client.reportMethodSuccess("obfs3_flash", socksVer, addrport)
         elif kw == "CMETHODS" and args == "DONE":
             self.client.reportMethodsEnd()
         else:
             pass
 
-def main(*args):
-    # config
+# TODO(infinity0): remove this class when twisted update their side
+class ProxyServer(_ProxyServer):
+
+    def connectionMade(self):
+        # code copied from super class, except instead of connecting
+        # to a TCP endpoint we abstract that out to a child method
+        self.transport.pauseProducing()
+
+        client = self.clientProtocolFactory()
+        client.setServer(self)
+
+        if self.reactor is None:
+            from twisted.internet import reactor
+            self.reactor = reactor
+
+        self.connectProxyClient(client)
+
+    def connectProxyClient(self, client):
+        raise NotImplementedError()
+
+class SOCKS4Wrapper(ProxyServer):
+
+    def connectProxyClient(self, client):
+        TCPPoint = TCP4ClientEndpoint(
+            self.reactor,
+            self.factory.local_host,
+            self.factory.local_port)
+        SOCKSPoint = SOCKS4ClientEndpoint(
+            self.factory.remote_host,
+            self.factory.remote_port,
+            TCPPoint)
+        d = SOCKSPoint.connect(client)
+        @d.addErrback
+        def _gotError(error):
+            log.err(error, "error connecting to SOCKS server")
+
+class SOCKS4WrapperFactory(Factory):
+    protocol = SOCKS4Wrapper
+
+    def __init__(self, local_host, local_port, remote_host, remote_port):
+        self.local_host = local_host
+        self.local_port = local_port
+        self.remote_host = remote_host
+        self.remote_port = remote_port
+
+def obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out):
+    """
+    Set up the obfs3_flash combined PT.
+
+    :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
+    :param pyptlib.client.ClientTransportPlugin client: PT client API.
+    :param int fp_local: Listen port for outgoing flashproxy connections.
+    :param int fp_remote: Listen port for incoming flashproxy connections.
+    :param int obfs_out: Listen port for obfsproxy to connect to.
+    """
+    # TODO(infinity0): have this return a Deferred that indicates success/failure
     ob_client = os.getenv("OBFSPROXY", "obfsproxy")
     fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
-    fp_local_port = int(os.getenv("FLASHPROXY_LOCAL_PORT", 9001))
-    fp_remote_port = int(os.getenv("FLASHPROXY_REMOTE_PORT", 9000))
-    mid_port = 2334
 
-    # runtime state
-    client = ClientTransportPlugin.fromEnv()
-    client.init(['obfs3_flash'])
-    cur_env = pt_child_env(os.environ, client.config.getManagedTransportVersions())
-
-    from twisted.internet import reactor
-    auto_killall(1, cleanup=lambda:reactor.stop())
+    cur_env = pt_child_env(client.config.getManagedTransportVersions())
 
     fp_proc = Popen(
-        [fp_client, ":%s" % fp_local_port, ":%s" % fp_remote_port],
+        [fp_client, ":%s" % fp_local, ":%s" % fp_remote],
         stdout = SINK,
         env = dict(cur_env + {
             "TOR_PT_CLIENT_TRANSPORTS": "websocket",
         }.items()),
         )
 
-    # TODO(infinity0): swap this out for an in-process twisted socks client
-    mid_proc = Popen(
-        ["socat",
-         "TCP-LISTEN:%s,reuseaddr,fork,bind=127.0.0.1" % mid_port,
-         "SOCKS4A:127.0.0.1:0.0.1.0:1,socksport=%s" % fp_local_port],
-        stdout = SINK,
-        )
+    reactor.listenTCP(interface='127.0.0.1', port=obfs_out, factory=
+        SOCKS4WrapperFactory('127.0.0.1', fp_local, '0.0.1.0', 1))
 
     ob_proc = Popen(
         [ob_client, "managed"],
@@ -92,8 +142,25 @@ def main(*args):
         }.items()),
         )
 
-    stdio.StandardIO(PTInterceptor(client),
+    StandardIO(PTInterceptor(client),
         stdin=ob_proc.stdout.fileno(), reactor=reactor)
+
+def main(*args):
+    # config
+    fp_local = int(os.getenv("FLASHPROXY_LOCAL_PORT", 9001))
+    fp_remote = int(os.getenv("FLASHPROXY_REMOTE_PORT", 9000))
+    obfs_out = 2334
+
+    # runtime state
+    client = ClientTransportPlugin()
+    client.init(['obfs3_flash'])
+    if not client.getServedTransports():
+        print >>sys.stderr, "no transports to serve"
+        return 1
+
+    from twisted.internet import reactor
+    auto_killall(1, cleanup=lambda:reactor.stop())
+    obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out)
     reactor.run(installSignalHandlers=0)
     return 0
 
