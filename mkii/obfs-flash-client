@@ -38,17 +38,16 @@ def pt_child_env(managed_ver, env=os.environ):
 class CMethod(namedtuple('MethodSpec', 'name protocol addrport args opts')):
     pass
 
-class ManagedTransportProtocol(LineReceiver):
+class ManagedTransportProtocolV1(LineReceiver):
     """
     A Twisted IProtocol to read PT output.
 
     See pt-spec.txt and others for details of the protocol.
-
-    Note: all output goes via the PT client rather than sendLine().
     """
     # TODO(infinity0): eventually this could be padded out and moved to pyptlib
 
     delimiter = os.linesep
+    protocol_version = "1"
 
     def __init__(self):
         self.cmethods = {}
@@ -71,7 +70,7 @@ class ManagedTransportProtocol(LineReceiver):
         elif kw == "CMETHODS" and args == "DONE":
             self.dCmethodsDone.callback(self.cmethods)
         else:
-            cmethod = args.split(' ')
+            pass # ignore unrecognised line
 
     def parseMethods(self, *args):
         name = args[0]
@@ -128,14 +127,14 @@ class SOCKS4WrapperFactory(Factory):
 
 def pt_launch_child(reactor, client, methodnames, cmdline):
     """Launch a child PT and ensure it has the right transport methods."""
-    cur_env = pt_child_env(client.config.getManagedTransportVersions())
+    cur_env = pt_child_env(ManagedTransportProtocolV1.protocol_version)
     sub_proc = Popen(cmdline,
         stdout = PIPE,
         env = dict(cur_env + {
             "TOR_PT_CLIENT_TRANSPORTS": ",".join(methodnames),
         }.items()),
         )
-    sub_protocol = ManagedTransportProtocol()
+    sub_protocol = ManagedTransportProtocolV1()
     StandardIO(sub_protocol, stdin=sub_proc.stdout.fileno(), reactor=reactor)
     methoddefers = [sub_protocol.whenCmethodsDone().addCallback(
                         partial(pt_require_child, client, name))
