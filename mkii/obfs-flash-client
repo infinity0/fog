@@ -36,7 +36,15 @@ def pt_child_env(managed_ver, env=os.environ):
     return cur_env
 
 class CMethod(namedtuple('MethodSpec', 'name protocol addrport args opts')):
-    pass
+    @classmethod
+    def fromLine(cls, line):
+        args = line.rstrip('\n').split(' ')
+        name = args[0]
+        protocol = args[1]
+        addrport = parse_addr_spec(args[2])
+        args = args[3][-5:].split(',') if len(args) > 3 and args[3].startswith("ARGS=") else []
+        opts = args[4][-9:].split(',') if len(args) > 4 and args[4].startswith("OPT-ARGS=") else []
+        return CMethod(name, protocol, addrport, args, opts)
 
 class ManagedTransportProtocolV1(LineReceiver):
     """
@@ -65,20 +73,13 @@ class ManagedTransportProtocolV1(LineReceiver):
         if kw == "VERSION":
             pass
         elif kw == "CMETHOD":
-            cmethod = self.parseMethods(*args.split(' '))
+            cmethod = CMethod.fromLine(args)
             self.cmethods[cmethod.name] = cmethod
         elif kw == "CMETHODS" and args == "DONE":
             self.dCmethodsDone.callback(self.cmethods)
         else:
             pass # ignore unrecognised line
 
-    def parseMethods(self, *args):
-        name = args[0]
-        protocol = args[1]
-        addrport = parse_addr_spec(args[2])
-        args = args[3][-5:].split(',') if len(args) > 3 and args[3].startswith("ARGS=") else []
-        opts = args[4][-9:].split(',') if len(args) > 4 and args[4].startswith("OPT-ARGS=") else []
-        return CMethod(name, protocol, addrport, args, opts)
 
 # TODO(infinity0): remove this class when twisted update their side
 class ProxyServer(_ProxyServer):
