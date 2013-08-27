@@ -38,7 +38,7 @@ def pt_child_env(managed_ver, env=os.environ):
 class CMethod(namedtuple('MethodSpec', 'name protocol addrport args opts')):
     pass
 
-class PTInterceptor(LineReceiver):
+class ManagedTransportProtocol(LineReceiver):
     """
     A Twisted IProtocol to read PT output.
 
@@ -52,7 +52,12 @@ class PTInterceptor(LineReceiver):
 
     def __init__(self):
         self.cmethods = {}
-        self.whenCmethodsDone = Deferred()
+        self.dCmethodsDone = Deferred()
+
+    def whenCmethodsDone(self):
+        d = Deferred()
+        self.dCmethodsDone.addCallback(lambda v: (d.callback(v), v)[1])
+        return d
 
     def lineReceived(self, line):
         if not line: return
@@ -64,7 +69,7 @@ class PTInterceptor(LineReceiver):
             cmethod = self.parseMethods(*args.split(' '))
             self.cmethods[cmethod.name] = cmethod
         elif kw == "CMETHODS" and args == "DONE":
-            self.whenCmethodsDone.callback(self.cmethods)
+            self.dCmethodsDone.callback(self.cmethods)
         else:
             cmethod = args.split(' ')
 
@@ -121,6 +126,29 @@ class SOCKS4WrapperFactory(Factory):
         self.remote_host = remote_host
         self.remote_port = remote_port
 
+def pt_launch_child(reactor, client, methodnames, cmdline):
+    """Launch a child PT and ensure it has the right transport methods."""
+    cur_env = pt_child_env(client.config.getManagedTransportVersions())
+    sub_proc = Popen(cmdline,
+        stdout = PIPE,
+        env = dict(cur_env + {
+            "TOR_PT_CLIENT_TRANSPORTS": ",".join(methodnames),
+        }.items()),
+        )
+    sub_protocol = ManagedTransportProtocol()
+    StandardIO(sub_protocol, stdin=sub_proc.stdout.fileno(), reactor=reactor)
+    methoddefers = [sub_protocol.whenCmethodsDone().addCallback(
+                        partial(pt_require_child, client, name))
+                    for name in methodnames]
+    return sub_proc, sub_protocol, methoddefers
+
+def pt_require_child(client, childmethod, cmethods):
+    """Callback for checking a child PT has the right transport methods."""
+    if childmethod not in cmethods:
+        client.reportMethodError(PT_METHOD_NAME, "failed to start required child transport: %s" % childmethod)
+        raise ValueError()
+    return cmethods[childmethod]
+
 def obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out):
     """
     Set up the obfs3_flash combined PT.
@@ -134,45 +162,22 @@ def obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out):
     ob_client = os.getenv("OBFSPROXY", "obfsproxy")
     fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
 
-    cur_env = pt_child_env(client.config.getManagedTransportVersions())
-    def require_child(childmethod, cmethods):
-        if childmethod not in cmethods:
-            client.reportMethodError(PT_METHOD_NAME, "failed to start required child transport: %s" % childmethod)
-            raise ValueError()
-        return cmethods[childmethod]
-
     # start fp and ensure that it launches OK
-    fp_proc = Popen(
-        [fp_client, ":%s" % fp_local, ":%s" % fp_remote],
-        stdout = PIPE,
-        env = dict(cur_env + {
-            "TOR_PT_CLIENT_TRANSPORTS": "websocket",
-        }.items()),
-        )
-    fp_int = PTInterceptor()
-    StandardIO(fp_int, stdin=fp_proc.stdout.fileno(), reactor=reactor)
-    fp_int.whenCmethodsDone.addCallback(partial(require_child, "websocket"))
+    fp_proc, fp_prot, fp_defer = pt_launch_child(reactor, client,
+        ["websocket"], [fp_client, ":%s" % fp_local, ":%s" % fp_remote])
 
     # shim to wrap obfs plain output to SOCKS input for flashproxy
     reactor.listenTCP(interface='127.0.0.1', port=obfs_out, factory=
         SOCKS4WrapperFactory('127.0.0.1', fp_local, '0.0.1.0', 1))
 
     # start ob and ensure that it launches OK
-    ob_proc = Popen(
-        [ob_client, "managed"],
-        stdout = PIPE,
-        env = dict(cur_env + {
-            "TOR_PT_CLIENT_TRANSPORTS": "obfs3",
-        }.items()),
-        )
-    ob_int = PTInterceptor()
-    StandardIO(ob_int, stdin=ob_proc.stdout.fileno(), reactor=reactor)
-    ob_int.whenCmethodsDone.addCallback(partial(require_child, "obfs3"))
+    ob_proc, ob_prot, ob_defer = pt_launch_child(reactor, client,
+        ["obfs3"], [ob_client, "managed"])
 
-    whenAllDone = DeferredList([fp_int.whenCmethodsDone, ob_int.whenCmethodsDone])
+    whenAllDone = DeferredList(fp_defer + ob_defer)
     def allDone(success_list):
         success = all(r[0] for r in success_list)
-        # failure was already reported by require_child
+        # failure was already reported by pt_require_child
         if success:
             ob_result = [r[1] for r in success_list if r[1].name == "obfs3"][0]
             # now report success of the overall composed PT
