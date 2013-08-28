@@ -72,7 +72,7 @@ func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 	return nil, errors.New(fmt.Sprintf("no SMETHOD %s found before SMETHODS DONE", methodName))
 }
 
-func startChain(bindAddr *net.TCPAddr) (*net.TCPAddr, error) {
+func startChain() (*net.TCPAddr, error) {
 	var midBindAddr, extBindAddr *net.TCPAddr
 	var tmpProcs []*os.Process
 
@@ -117,14 +117,14 @@ func startChain(bindAddr *net.TCPAddr) (*net.TCPAddr, error) {
 	}
 	log("obfsproxy bindaddr is %s.", midBindAddr)
 
-	// websocket-server talks to midBindAddr and listens on bindAddr.
+	// websocket-server talks to midBindAddr and listens on extBindAddr.
 	cmd = exec.Command("websocket-server")
 	cmd.Env = []string{
 		"TOR_PT_MANAGED_TRANSPORT_VER=1",
 		"TOR_PT_STATE_LOCATION=" + os.Getenv("TOR_PT_STATE_LOCATION"),
 		"TOR_PT_ORPORT=" + midBindAddr.String(),
 		"TOR_PT_SERVER_TRANSPORTS=websocket",
-		"TOR_PT_SERVER_BINDADDR=websocket-" + bindAddr.String(),
+		"TOR_PT_SERVER_BINDADDR=websocket-127.0.0.1:0",
 	}
 	log("websocket-server environment %q", cmd.Env)
 	stdout, err = cmd.StdoutPipe()
@@ -153,6 +153,105 @@ func startChain(bindAddr *net.TCPAddr) (*net.TCPAddr, error) {
 	tmpProcs = []*os.Process{}
 
 	return extBindAddr, err
+}
+
+func acceptLoop(name string, ln *net.TCPListener, ch chan *net.TCPConn) {
+	for {
+		conn, err := ln.AcceptTCP()
+		if err != nil {
+			log("%s accept: %s.", name, err)
+			break
+		}
+		log("%s connection from %s.", name, conn.RemoteAddr().String())
+		ch <- conn
+	}
+	close(ch)
+}
+
+func copyLoop(a, b *net.TCPConn) error {
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+
+	go func() {
+		n, err := io.Copy(b, a)
+		if err != nil {
+			log("after %d bytes from %s to %s: %s.", n, a.RemoteAddr().String(), b.RemoteAddr().String(), err)
+		}
+		a.CloseRead()
+		b.CloseWrite()
+		wg.Done()
+	}()
+
+	go func() {
+		n, err := io.Copy(a, b)
+		if err != nil {
+			log("after %d bytes from %s to %s: %s.", n, b.RemoteAddr().String(), a.RemoteAddr().String(), err)
+		}
+		b.CloseRead()
+		a.CloseWrite()
+		wg.Done()
+	}()
+
+	wg.Wait()
+
+	return nil
+}
+
+func handleExternalConnection(conn *net.TCPConn, chainAddr *net.TCPAddr) error {
+	chain, err := net.DialTCP("tcp", nil, chainAddr)
+	if err != nil {
+		log("error dialing proxy chain: %s.", err)
+		return err
+	}
+	err = copyLoop(conn, chain)
+	if err != nil {
+		log("error copying between ext and proxy chain: %s.", err)
+		return err
+	}
+	return nil
+}
+
+func listenerLoop(extLn *net.TCPListener, chainAddr *net.TCPAddr) {
+	defer extLn.Close()
+	// XXX defer kill procs.
+
+	extChan := make(chan *net.TCPConn)
+	go acceptLoop("external", extLn, extChan)
+
+loop:
+	for {
+		select {
+		case conn, ok := <-extChan:
+			if !ok {
+				break loop
+			}
+			go handleExternalConnection(conn, chainAddr)
+		}
+	}
+}
+
+func startListeners(bindAddr *net.TCPAddr) (*net.TCPListener, error) {
+	// Start proxy chain.
+	chainAddr, err := startChain()
+	if err != nil {
+		log("error starting proxy chain: %s.", err)
+		return nil, err
+	}
+	log("proxy chain on %s.", chainAddr)
+
+	// Start external Internet listener (listens on bindAddr and connects to
+	// proxy chain).
+	extLn, err := net.ListenTCP("tcp", bindAddr)
+	if err != nil {
+		log("error opening external listener: %s.", err)
+		return nil, err
+	}
+	log("external listener on %s.", extLn.Addr())
+
+	go listenerLoop(extLn, chainAddr)
+
+	return extLn, nil
 }
 
 func main() {
@@ -184,12 +283,12 @@ func main() {
 			bindAddr.Addr.Port = port
 		}
 
-		addr, err := startChain(bindAddr.Addr)
+		ln, err := startListeners(bindAddr.Addr)
 		if err != nil {
 			pt.SmethodError(bindAddr.MethodName, err.Error())
 			continue
 		}
-		pt.Smethod(bindAddr.MethodName, addr)
+		pt.Smethod(bindAddr.MethodName, ln.Addr())
 	}
 	pt.SmethodsDone()
 
