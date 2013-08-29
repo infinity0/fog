@@ -72,7 +72,7 @@ func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 	return nil, errors.New(fmt.Sprintf("no SMETHOD %s found before SMETHODS DONE", methodName))
 }
 
-func startChain() (*net.TCPAddr, error) {
+func startChain(connectBackAddr net.Addr) (*net.TCPAddr, error) {
 	var midBindAddr, extBindAddr *net.TCPAddr
 	var tmpProcs []*os.Process
 
@@ -85,14 +85,13 @@ func startChain() (*net.TCPAddr, error) {
 		}
 	}()
 
-	// obfsproxy talks directly to the real ORPort and listens on
-	// midBindAddr.
+	// obfsproxy talks to connectBackAddr and listens on midBindAddr.
 	cmd := exec.Command("obfsproxy", "managed")
 	cmd.Env = []string{
 		"TOR_PT_MANAGED_TRANSPORT_VER=1",
 		"TOR_PT_STATE_LOCATION=" + os.Getenv("TOR_PT_STATE_LOCATION"),
 		"TOR_PT_EXTENDED_SERVER_PORT=",
-		"TOR_PT_ORPORT=" + os.Getenv("TOR_PT_ORPORT"),
+		"TOR_PT_ORPORT=" + connectBackAddr.String(),
 		"TOR_PT_SERVER_TRANSPORTS=obfs3",
 		"TOR_PT_SERVER_BINDADDR=obfs3-127.0.0.1:0",
 	}
@@ -212,12 +211,29 @@ func handleExternalConnection(conn *net.TCPConn, chainAddr *net.TCPAddr) error {
 	return nil
 }
 
-func listenerLoop(extLn *net.TCPListener, chainAddr *net.TCPAddr) {
+func handleInternalConnection(conn *net.TCPConn) error {
+	or, err := pt.ConnectOr(&ptInfo, conn, ptMethodName)
+	if err != nil {
+		log("error connecting to ORPort: %s.", err)
+		return err
+	}
+	err = copyLoop(or, conn)
+	if err != nil {
+		log("error copying between int and ORPort: %s.", err)
+		return err
+	}
+	return nil
+}
+
+func listenerLoop(extLn, intLn *net.TCPListener, chainAddr *net.TCPAddr) {
 	defer extLn.Close()
+	defer intLn.Close()
 	// XXX defer kill procs.
 
 	extChan := make(chan *net.TCPConn)
+	intChan := make(chan *net.TCPConn)
 	go acceptLoop("external", extLn, extChan)
+	go acceptLoop("internal", intLn, intChan)
 
 loop:
 	for {
@@ -227,15 +243,29 @@ loop:
 				break loop
 			}
 			go handleExternalConnection(conn, chainAddr)
+		case conn, ok := <-intChan:
+			if !ok {
+				break loop
+			}
+			go handleInternalConnection(conn)
 		}
 	}
 }
 
 func startListeners(bindAddr *net.TCPAddr) (*net.TCPListener, error) {
+	// Start internal listener (the proxy chain connects back to this).
+	intLn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		log("error opening internal listener: %s.", err)
+		return nil, err
+	}
+	log("internal listener on %s.", intLn.Addr())
+
 	// Start proxy chain.
-	chainAddr, err := startChain()
+	chainAddr, err := startChain(intLn.Addr())
 	if err != nil {
 		log("error starting proxy chain: %s.", err)
+		intLn.Close()
 		return nil, err
 	}
 	log("proxy chain on %s.", chainAddr)
@@ -245,11 +275,13 @@ func startListeners(bindAddr *net.TCPAddr) (*net.TCPListener, error) {
 	extLn, err := net.ListenTCP("tcp", bindAddr)
 	if err != nil {
 		log("error opening external listener: %s.", err)
+		intLn.Close()
+		// XXX kill procs
 		return nil, err
 	}
 	log("external listener on %s.", extLn.Addr())
 
-	go listenerLoop(extLn, chainAddr)
+	go listenerLoop(extLn, intLn, chainAddr)
 
 	return extLn, nil
 }
