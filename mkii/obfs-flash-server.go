@@ -197,7 +197,9 @@ func copyLoop(a, b *net.TCPConn) error {
 	return nil
 }
 
-func handleExternalConnection(conn *net.TCPConn, chainAddr *net.TCPAddr) error {
+func handleExternalConnection(conn *net.TCPConn, connChan chan *net.TCPConn, chainAddr *net.TCPAddr) error {
+	connChan <- conn
+	log("handleExternalConnection: now %d conns buffered.", len(connChan))
 	chain, err := net.DialTCP("tcp", nil, chainAddr)
 	if err != nil {
 		log("error dialing proxy chain: %s.", err)
@@ -211,8 +213,11 @@ func handleExternalConnection(conn *net.TCPConn, chainAddr *net.TCPAddr) error {
 	return nil
 }
 
-func handleInternalConnection(conn *net.TCPConn) error {
-	or, err := pt.ConnectOr(&ptInfo, conn, ptMethodName)
+func handleInternalConnection(conn *net.TCPConn, connChan chan *net.TCPConn) error {
+	extConn := <-connChan
+	log("connecting to ORPort using remote addr %s.", extConn.RemoteAddr())
+	log("handleInternalConnection: now %d conns buffered.", len(connChan))
+	or, err := pt.ConnectOr(&ptInfo, extConn, ptMethodName)
 	if err != nil {
 		log("error connecting to ORPort: %s.", err)
 		return err
@@ -235,6 +240,10 @@ func listenerLoop(extLn, intLn *net.TCPListener, chainAddr *net.TCPAddr) {
 	go acceptLoop("external", extLn, extChan)
 	go acceptLoop("internal", intLn, intChan)
 
+	// This channel acts as a queue to forward externally connecting IP
+	// addresses to the extended ORPort.
+	connChan := make(chan *net.TCPConn, 10)
+
 loop:
 	for {
 		select {
@@ -242,12 +251,12 @@ loop:
 			if !ok {
 				break loop
 			}
-			go handleExternalConnection(conn, chainAddr)
+			go handleExternalConnection(conn, connChan, chainAddr)
 		case conn, ok := <-intChan:
 			if !ok {
 				break loop
 			}
-			go handleInternalConnection(conn)
+			go handleInternalConnection(conn, connChan)
 		}
 	}
 }
