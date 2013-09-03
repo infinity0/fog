@@ -2,20 +2,19 @@
 
 import os
 import sys
-import time
 
 from collections import namedtuple
 from functools import partial
 
 from pyptlib.util import parse_addr_spec
-from pyptlib.util.subproc import auto_killall, Popen, SINK
+from pyptlib.util.subproc import auto_killall, Popen
 from pyptlib.client import ClientTransportPlugin
 
 from subprocess import PIPE
 
 from twisted.internet.defer import Deferred, DeferredList
 from twisted.internet.stdio import StandardIO
-from twisted.internet.protocol import Factory
+from twisted.internet.protocol import Factory, connectionDone
 from twisted.internet.endpoints import TCP4ClientEndpoint
 from twisted.protocols.basic import LineReceiver
 from twisted.protocols.portforward import ProxyServer as _ProxyServer
@@ -107,7 +106,7 @@ class ManagedTransportProtocolV1(LineReceiver):
         else:
             pass # ignore unrecognised line
 
-    def connectionLost(self, reason):
+    def connectionLost(self, reason=connectionDone):
         self._firePluginError().errback(reason)
 
     def _abort(self, exc):
@@ -212,7 +211,7 @@ def obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out):
     fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
 
     # start fp and ensure that it launches OK
-    fp_proc, fp_prot, fp_defer = pt_launch_child(reactor, client,
+    _, _, fp_defer = pt_launch_child(reactor, client,
         ["websocket"], [fp_client, ":%s" % fp_local, ":%s" % fp_remote])
 
     # shim to wrap obfs plain output to SOCKS input for flashproxy
@@ -220,7 +219,7 @@ def obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out):
         SOCKS4WrapperFactory('127.0.0.1', fp_local, '0.0.1.0', 1))
 
     # start ob and ensure that it launches OK
-    ob_proc, ob_prot, ob_defer = pt_launch_child(reactor, client,
+    _, _, ob_defer = pt_launch_child(reactor, client,
         ["obfs3"], [ob_client, "managed"])
 
     whenAllDone = DeferredList(fp_defer + ob_defer, consumeErrors=True)
@@ -244,14 +243,14 @@ def main(*args):
     client = ClientTransportPlugin()
     client.init([PT_METHOD_NAME])
     if not client.getServedTransports():
-        print >>sys.stderr, "no transports to serve"
+        print >> sys.stderr, "no transports to serve"
         return 1
 
     from twisted.internet import reactor
-    auto_killall(1, cleanup=lambda:reactor.stop())
+    auto_killall(1, cleanup=reactor.stop)
     obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out)
     reactor.run(installSignalHandlers=0)
     return 0
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main(*sys.argv[1:]))
