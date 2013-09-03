@@ -46,6 +46,17 @@ class CMethod(namedtuple('MethodSpec', 'name protocol addrport args opts')):
         opts = args[4][-9:].split(',') if len(args) > 4 and args[4].startswith("OPT-ARGS=") else []
         return CMethod(name, protocol, addrport, args, opts)
 
+def branch(parent):
+    """
+    Returns a new Deferred that does not advance the callback-chain of the parent.
+
+    See http://xph.us/2009/12/10/asynchronous-programming-in-python.html for motivation.
+    """
+    d = Deferred()
+    parent.addCallback(lambda v: (v, d.callback(v))[0])
+    parent.addErrback(lambda f: (f, d.errback(f))[1])
+    return d
+
 class ManagedTransportProtocolV1(LineReceiver):
     """
     A Twisted IProtocol to read PT output.
@@ -59,27 +70,65 @@ class ManagedTransportProtocolV1(LineReceiver):
 
     def __init__(self):
         self.cmethods = {}
-        self.dCmethodsDone = Deferred()
+        self._dCMethodsDone = Deferred()
+        self._dPluginError = Deferred()
+        # dPluginError triggers errors on all sub-events, not the other way round
+        # so fatal sub-events should call _abort rather than errback on their Deferreds
+        self._dPluginError.addErrback(lambda f: (f, self._fireCMethodsDone().errback(f))[0])
+        # TODO(infinity0): call _abort if we don't recv CMETHODS DONE within n sec
 
-    def whenCmethodsDone(self):
-        d = Deferred()
-        self.dCmethodsDone.addCallback(lambda v: (d.callback(v), v)[1])
-        return d
+    def whenCMethodsDone(self):
+        """
+        Return a new Deferred that calls-back when CMETHODS DONE is received.
+        """
+        return branch(self._dCMethodsDone)
+
+    def whenPluginError(self):
+        """
+        Return a new Deferred that errors-back when the remote plugin fails.
+
+        Note: the success chain (callback) is never fired.
+        """
+        return branch(self._dPluginError)
 
     def lineReceived(self, line):
         if not line: return
 
         (kw, args) = line.split(' ', 1)
         if kw == "VERSION":
-            pass
+            version = args.strip()
+            if version != self.protocol_version:
+                self._abort(ValueError("child used unsupported managed transport version: %s" % version))
         elif kw == "CMETHOD":
             cmethod = CMethod.fromLine(args)
             self.cmethods[cmethod.name] = cmethod
         elif kw == "CMETHODS" and args == "DONE":
-            self.dCmethodsDone.callback(self.cmethods)
+            self._fireCMethodsDone().callback(self.cmethods)
         else:
             pass # ignore unrecognised line
 
+    def connectionLost(self, reason):
+        self._firePluginError().errback(reason)
+
+    def _abort(self, exc):
+        self._firePluginError().errback(exc)
+        self.transport.loseConnection()
+
+    def _fireCMethodsDone(self):
+        """Return dCMethodsDone or a dummy if it was already called."""
+        if self._dCMethodsDone:
+            d = self._dCMethodsDone
+            self._dCMethodsDone = None
+            return d
+        return Deferred()
+
+    def _firePluginError(self):
+        """Return dPluginError or a dummy if it was already called."""
+        if self._dPluginError:
+            d = self._dPluginError
+            self._dPluginError = None
+            return d
+        return Deferred()
 
 # TODO(infinity0): remove this class when twisted update their side
 class ProxyServer(_ProxyServer):
@@ -137,7 +186,7 @@ def pt_launch_child(reactor, client, methodnames, cmdline):
         )
     sub_protocol = ManagedTransportProtocolV1()
     StandardIO(sub_protocol, stdin=sub_proc.stdout.fileno(), reactor=reactor)
-    methoddefers = [sub_protocol.whenCmethodsDone().addCallback(
+    methoddefers = [sub_protocol.whenCMethodsDone().addCallback(
                         partial(pt_require_child, client, name))
                     for name in methodnames]
     return sub_proc, sub_protocol, methoddefers
@@ -174,7 +223,7 @@ def obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out):
     ob_proc, ob_prot, ob_defer = pt_launch_child(reactor, client,
         ["obfs3"], [ob_client, "managed"])
 
-    whenAllDone = DeferredList(fp_defer + ob_defer)
+    whenAllDone = DeferredList(fp_defer + ob_defer, consumeErrors=True)
     def allDone(success_list):
         success = all(r[0] for r in success_list)
         # failure was already reported by pt_require_child
