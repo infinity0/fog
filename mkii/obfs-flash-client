@@ -120,7 +120,7 @@ class ManagedTransportProtocolV1(LineReceiver):
             d = self._dCMethodsDone
             self._dCMethodsDone = None
             return d
-        return Deferred()
+        return Deferred().addErrback(lambda *args: None)
 
     def _firePluginError(self):
         """Return dPluginError or a dummy if it was already called."""
@@ -128,7 +128,7 @@ class ManagedTransportProtocolV1(LineReceiver):
             d = self._dPluginError
             self._dPluginError = None
             return d
-        return Deferred()
+        return Deferred().addErrback(lambda *args: None)
 
 # TODO(infinity0): remove this class when twisted update their side
 class ProxyServer(_ProxyServer):
