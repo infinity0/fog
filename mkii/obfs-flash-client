@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+import argparse
 import os
 import sys
 
@@ -197,26 +198,22 @@ def pt_require_child(client, childmethod, cmethods):
         raise ValueError()
     return cmethods[childmethod]
 
-def obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out):
+def obfs3_flash(reactor, client, obfs_out, fp_remote, fp_local=0):
     """
     Set up the obfs3_flash combined PT.
 
     :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
     :param pyptlib.client.ClientTransportPlugin client: PT client API.
-    :param int fp_local: Listen port for outgoing flashproxy connections.
-    :param int fp_remote: Listen port for incoming flashproxy connections.
-    :param int obfs_out: Listen port for obfsproxy to connect to.
+    :param int obfs_out: Local listen port for obfsproxy to connect to.
+    :param str fp_remote: Listen address for remote flashproxy connections.
+    :param int fp_local: Local listen port for local flashproxy connections.
     """
     ob_client = os.getenv("OBFSPROXY", "obfsproxy")
     fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
 
     # start fp and ensure that it launches OK
     _, _, fp_defer = pt_launch_child(reactor, client,
-        ["websocket"], [fp_client, ":%s" % fp_local, ":%s" % fp_remote])
-
-    # shim to wrap obfs plain output to SOCKS input for flashproxy
-    reactor.listenTCP(interface='127.0.0.1', port=obfs_out, factory=
-        SOCKS4WrapperFactory('127.0.0.1', fp_local, '0.0.1.0', 1))
+        ["websocket"], [fp_client, '127.0.0.1:%s' % fp_local, fp_remote])
 
     # start ob and ensure that it launches OK
     _, _, ob_defer = pt_launch_child(reactor, client,
@@ -225,30 +222,46 @@ def obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out):
     whenAllDone = DeferredList(fp_defer + ob_defer, consumeErrors=True)
     def allDone(success_list):
         success = all(r[0] for r in success_list)
-        # failure was already reported by pt_require_child
-        if success:
-            ob_result = [r[1] for r in success_list if r[1].name == "obfs3"][0]
-            # now report success of the overall composed PT
-            client.reportMethodSuccess(PT_METHOD_NAME, ob_result.protocol, ob_result.addrport)
-            client.reportMethodsEnd()
+        # failure was already reported by pt_require_child, just return
+        if not success: return
+        fp_result = [r[1] for r in success_list if r[1].name == "websocket"][0]
+        ob_result = [r[1] for r in success_list if r[1].name == "obfs3"][0]
+
+        fp_port = fp_result.addrport[1] # if port was 0, read the actual port
+        # shim to wrap obfs data output to SOCKS input for flashproxy
+        reactor.listenTCP(interface='127.0.0.1', port=obfs_out, factory=
+            SOCKS4WrapperFactory('127.0.0.1', fp_port, '0.0.1.0', 1))
+
+        # now report success of the overall composed PT
+        client.reportMethodSuccess(PT_METHOD_NAME, ob_result.protocol, ob_result.addrport)
+        client.reportMethodsEnd()
     whenAllDone.addCallback(allDone)
 
 def main(*args):
-    # config
-    fp_local = int(os.getenv("FLASHPROXY_LOCAL_PORT", 9001))
-    fp_remote = int(os.getenv("FLASHPROXY_REMOTE_PORT", 9000))
-    obfs_out = 2334
+    parser = argparse.ArgumentParser()
+    parser.add_argument("obfs_out", help="local listen port for obfsproxy to "
+        "connect to. This must match the appropriate 'Bridge %s' line in your "
+        "torrc." % PT_METHOD_NAME,
+        metavar='PORT', type=int)
+    parser.add_argument("fp_remote", help="remote connections listen address "
+        "for flashproxy, default %(default)s",
+        metavar='REMOTE:PORT', nargs='?', default=":9000")
+    # TODO(infinity0): add an "external" mode, which would require us to run
+    # obfsproxy in external mode too.
 
-    # runtime state
+    opts = parser.parse_args(args)
+    # ensure str address is valid
+    _, _, = parse_addr_spec(opts.fp_remote, defhost="0.0.0.0")
+
     client = ClientTransportPlugin()
     client.init([PT_METHOD_NAME])
-    if not client.getServedTransports():
+    if not client.getTransports():
         print >> sys.stderr, "no transports to serve"
         return 1
 
     from twisted.internet import reactor
     auto_killall(1, cleanup=reactor.stop)
-    obfs3_flash(reactor, client, fp_local, fp_remote, obfs_out)
+    obfs3_flash(reactor, client, opts.obfs_out, opts.fp_remote)
     reactor.run(installSignalHandlers=0)
     return 0
 
