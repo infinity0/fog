@@ -317,6 +317,7 @@ func main() {
 	log("Starting.")
 	ptInfo = pt.ServerSetup([]string{ptMethodName})
 
+	listeners := make([]*net.TCPListener, 0)
 	for _, bindAddr := range ptInfo.BindAddrs {
 		// Override tor's requested port (which is 0 if this transport
 		// has not been run before) with the one requested by the --port
@@ -331,6 +332,7 @@ func main() {
 			continue
 		}
 		pt.Smethod(bindAddr.MethodName, ln.Addr())
+		listeners = append(listeners, ln)
 	}
 	pt.SmethodsDone()
 
@@ -339,6 +341,9 @@ func main() {
 
 	sig := <-sigChan
 	log("Got first signal %q.", sig)
+	for _, ln := range listeners {
+		ln.Close()
+	}
 	for _, proc := range procs {
 		log("Sending signal %q to process with pid %d.", sig, proc.Pid)
 		proc.Signal(sig)
