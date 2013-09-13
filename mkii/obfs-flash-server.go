@@ -19,6 +19,7 @@ import (
 import "git.torproject.org/flashproxy.git/websocket-transport/src/pt"
 
 const ptMethodName = "obfs3_flash"
+const connStackSize = 10
 const subprocessWaitTimeout = 30 * time.Second
 
 var logFile = os.Stderr
@@ -203,14 +204,14 @@ func copyLoop(a, b *net.TCPConn) error {
 	return nil
 }
 
-func handleExternalConnection(conn *net.TCPConn, connChan chan *net.TCPConn, chainAddr *net.TCPAddr) error {
+func handleExternalConnection(conn *net.TCPConn, connStack *Stack, chainAddr *net.TCPAddr) error {
 	handlerChan <- 1
 	defer func() {
 		handlerChan <- -1
 	}()
 
-	connChan <- conn
-	log("handleExternalConnection: now %d conns buffered.", len(connChan))
+	connStack.Push(conn)
+	log("handleExternalConnection: now %d conns buffered.", connStack.Length())
 	chain, err := net.DialTCP("tcp", nil, chainAddr)
 	if err != nil {
 		log("error dialing proxy chain: %s.", err)
@@ -224,15 +225,24 @@ func handleExternalConnection(conn *net.TCPConn, connChan chan *net.TCPConn, cha
 	return nil
 }
 
-func handleInternalConnection(conn *net.TCPConn, connChan chan *net.TCPConn) error {
+func handleInternalConnection(conn *net.TCPConn, connStack *Stack) error {
 	handlerChan <- 1
 	defer func() {
 		handlerChan <- -1
 	}()
 
-	extConn := <-connChan
+	elem, ok := connStack.Pop()
+	if !ok {
+		log("Underflow of connection stack, closing connection.")
+		err := conn.Close()
+		if err != nil {
+			log("Error in close: %s.", err)
+		}
+		return errors.New("connection stack underflow")
+	}
+	extConn := elem.(*net.TCPConn)
 	log("connecting to ORPort using remote addr %s.", extConn.RemoteAddr())
-	log("handleInternalConnection: now %d conns buffered.", len(connChan))
+	log("handleInternalConnection: now %d conns buffered.", connStack.Length())
 	or, err := pt.ConnectOr(&ptInfo, extConn, ptMethodName)
 	if err != nil {
 		log("error connecting to ORPort: %s.", err)
@@ -256,9 +266,9 @@ func listenerLoop(extLn, intLn *net.TCPListener, chainAddr *net.TCPAddr) {
 	go acceptLoop("external", extLn, extChan)
 	go acceptLoop("internal", intLn, intChan)
 
-	// This channel acts as a queue to forward externally connecting IP
-	// addresses to the extended ORPort.
-	connChan := make(chan *net.TCPConn, 10)
+	// This stack is to forward externally connecting IP addresses to the
+	// extended ORPort.
+	connStack := NewStack(connStackSize)
 
 loop:
 	for {
@@ -267,12 +277,12 @@ loop:
 			if !ok {
 				break loop
 			}
-			go handleExternalConnection(conn, connChan, chainAddr)
+			go handleExternalConnection(conn, connStack, chainAddr)
 		case conn, ok := <-intChan:
 			if !ok {
 				break loop
 			}
-			go handleInternalConnection(conn, connChan)
+			go handleInternalConnection(conn, connStack)
 		}
 	}
 }

@@ -1,6 +1,6 @@
 GOBUILDFLAGS =
 
-obfs-flash-server: obfs-flash-server.go
+obfs-flash-server: obfs-flash-server.go stack.go
 	go build $(GOBUILDFLAGS) -o "$@" $^
 
 test:
