@@ -393,4 +393,6 @@ func main() {
 			proc.Signal(sig)
 		}
 	}
+
+	log("Exiting.")
 }
