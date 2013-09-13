@@ -334,22 +334,25 @@ func main() {
 	}
 	pt.SmethodsDone()
 
-	sigintChan := make(chan os.Signal, 1)
-	signal.Notify(sigintChan, syscall.SIGINT)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	<-sigintChan
-
-	log("SIGINT 1.")
+	sig := <-sigChan
+	log("Got first signal %q.", sig)
 	for _, proc := range procs {
-		log("Sending SIGINT to process with pid %d.", proc.Pid)
-		proc.Signal(os.Interrupt)
+		log("Sending signal %q to process with pid %d.", sig, proc.Pid)
+		proc.Signal(sig)
 	}
 
-	<-sigintChan
+	if sig == syscall.SIGTERM {
+		log("Caught signal %q, exiting.", sig)
+		return
+	}
 
-	log("SIGINT 2.")
+	sig = <-sigChan
+	log("Got second signal %q.", sig)
 	for _, proc := range procs {
-		log("Sending SIGINT to process with pid %d.", proc.Pid)
-		proc.Signal(os.Interrupt)
+		log("Sending signal %q to process with pid %d.", sig, proc.Pid)
+		proc.Signal(sig)
 	}
 }
