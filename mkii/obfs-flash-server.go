@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -334,7 +335,7 @@ func main() {
 	pt.SmethodsDone()
 
 	sigintChan := make(chan os.Signal, 1)
-	signal.Notify(sigintChan, os.Interrupt)
+	signal.Notify(sigintChan, syscall.SIGINT)
 
 	<-sigintChan
 
