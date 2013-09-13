@@ -26,6 +26,10 @@ var ptInfo pt.ServerInfo
 
 var procs []*os.Process
 
+// When a connection handler starts, +1 is written to this channel; when it
+// ends, -1 is written.
+var handlerChan = make(chan int)
+
 func usage() {
 	fmt.Printf("Usage: %s [OPTIONS]\n", os.Args[0])
 	fmt.Printf("Chains websocket-server and obfsproxy transports. websocket-server and\n")
@@ -199,6 +203,11 @@ func copyLoop(a, b *net.TCPConn) error {
 }
 
 func handleExternalConnection(conn *net.TCPConn, connChan chan *net.TCPConn, chainAddr *net.TCPAddr) error {
+	handlerChan <- 1
+	defer func() {
+		handlerChan <- -1
+	}()
+
 	connChan <- conn
 	log("handleExternalConnection: now %d conns buffered.", len(connChan))
 	chain, err := net.DialTCP("tcp", nil, chainAddr)
@@ -215,6 +224,11 @@ func handleExternalConnection(conn *net.TCPConn, connChan chan *net.TCPConn, cha
 }
 
 func handleInternalConnection(conn *net.TCPConn, connChan chan *net.TCPConn) error {
+	handlerChan <- 1
+	defer func() {
+		handlerChan <- -1
+	}()
+
 	extConn := <-connChan
 	log("connecting to ORPort using remote addr %s.", extConn.RemoteAddr())
 	log("handleInternalConnection: now %d conns buffered.", len(connChan))
@@ -336,11 +350,20 @@ func main() {
 	}
 	pt.SmethodsDone()
 
+	var numHandlers int = 0
+	var sig os.Signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	sig := <-sigChan
-	log("Got first signal %q.", sig)
+	sig = nil
+	for sig == nil {
+		select {
+		case n := <-handlerChan:
+			numHandlers += n
+		case sig = <-sigChan:
+		}
+	}
+	log("Got first signal %q with %d running handlers.", sig, numHandlers)
 	for _, ln := range listeners {
 		ln.Close()
 	}
@@ -354,10 +377,20 @@ func main() {
 		return
 	}
 
-	sig = <-sigChan
-	log("Got second signal %q.", sig)
-	for _, proc := range procs {
-		log("Sending signal %q to process with pid %d.", sig, proc.Pid)
-		proc.Signal(sig)
+	sig = nil
+	for sig == nil && numHandlers != 0 {
+		select {
+		case n := <-handlerChan:
+			numHandlers += n
+			log("%d remaining handlers.", numHandlers)
+		case sig = <-sigChan:
+		}
+	}
+	if sig != nil {
+		log("Got second signal %q with %d running handlers.", sig, numHandlers)
+		for _, proc := range procs {
+			log("Sending signal %q to process with pid %d.", sig, proc.Pid)
+			proc.Signal(sig)
+		}
 	}
 }
