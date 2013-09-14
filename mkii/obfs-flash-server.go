@@ -26,8 +26,6 @@ var logFile = os.Stderr
 
 var ptInfo pt.ServerInfo
 
-var procs ProcList
-
 // When a connection handler starts, +1 is written to this channel; when it
 // ends, -1 is written.
 var handlerChan = make(chan int)
@@ -53,6 +51,16 @@ func log(format string, v ...interface{}) {
 }
 
 type ProcList []*os.Process
+
+func (procs ProcList) Signal(sig os.Signal) {
+	for _, p := range procs {
+		log("Sending signal %q to process with pid %d.", sig, p.Pid)
+		err := p.Signal(sig)
+		if err != nil {
+			log("Error sending signal %q to process with pid %d: %s.", sig, p.Pid, err)
+		}
+	}
+}
 
 func (procs ProcList) Kill() {
 	for _, p := range procs {
@@ -359,7 +367,6 @@ func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
 		chain.Shutdown()
 		return nil, err
 	}
-	procs = append(procs, chain.Procs...)
 	log("Proxy chain on %s.", chain.ProcsAddr)
 
 	// Start external Internet listener (listens on bindAddr and connects to
@@ -433,10 +440,7 @@ func main() {
 	log("Got first signal %q with %d running handlers.", sig, numHandlers)
 	for _, chain := range chains {
 		chain.CloseListeners()
-	}
-	for _, proc := range procs {
-		log("Sending signal %q to process with pid %d.", sig, proc.Pid)
-		proc.Signal(sig)
+		chain.Procs.Signal(sig)
 	}
 
 	if sig == syscall.SIGTERM {
@@ -455,9 +459,8 @@ func main() {
 	}
 	if sig != nil {
 		log("Got second signal %q with %d running handlers.", sig, numHandlers)
-		for _, proc := range procs {
-			log("Sending signal %q to process with pid %d.", sig, proc.Pid)
-			proc.Signal(sig)
+		for _, chain := range chains {
+			chain.Procs.Signal(sig)
 		}
 	}
 
