@@ -56,6 +56,8 @@ type Chain struct {
 	ExtLn, IntLn *net.TCPListener
 	ProcsAddr    *net.TCPAddr
 	Procs        []*os.Process
+	// This stack forwards external IP addresses to the extended ORPort.
+	Conns *Stack
 }
 
 func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
@@ -207,20 +209,20 @@ func copyLoop(a, b *net.TCPConn) error {
 	return nil
 }
 
-func handleExternalConnection(conn *net.TCPConn, connStack *Stack, chainAddr *net.TCPAddr) error {
+func handleExternalConnection(conn *net.TCPConn, chain *Chain) error {
 	handlerChan <- 1
 	defer func() {
 		handlerChan <- -1
 	}()
 
-	connStack.Push(conn)
-	log("handleExternalConnection: now %d conns buffered.", connStack.Length())
-	chain, err := net.DialTCP("tcp", nil, chainAddr)
+	chain.Conns.Push(conn)
+	log("handleExternalConnection: now %d conns buffered.", chain.Conns.Length())
+	procsConn, err := net.DialTCP("tcp", nil, chain.ProcsAddr)
 	if err != nil {
 		log("error dialing proxy chain: %s.", err)
 		return err
 	}
-	err = copyLoop(conn, chain)
+	err = copyLoop(conn, procsConn)
 	if err != nil {
 		log("error copying between ext and proxy chain: %s.", err)
 		return err
@@ -228,13 +230,13 @@ func handleExternalConnection(conn *net.TCPConn, connStack *Stack, chainAddr *ne
 	return nil
 }
 
-func handleInternalConnection(conn *net.TCPConn, connStack *Stack) error {
+func handleInternalConnection(conn *net.TCPConn, chain *Chain) error {
 	handlerChan <- 1
 	defer func() {
 		handlerChan <- -1
 	}()
 
-	elem, ok := connStack.Pop()
+	elem, ok := chain.Conns.Pop()
 	if !ok {
 		log("Underflow of connection stack, closing connection.")
 		err := conn.Close()
@@ -245,7 +247,7 @@ func handleInternalConnection(conn *net.TCPConn, connStack *Stack) error {
 	}
 	extConn := elem.(*net.TCPConn)
 	log("connecting to ORPort using remote addr %s.", extConn.RemoteAddr())
-	log("handleInternalConnection: now %d conns buffered.", connStack.Length())
+	log("handleInternalConnection: now %d conns buffered.", chain.Conns.Length())
 	or, err := pt.ConnectOr(&ptInfo, extConn, ptMethodName)
 	if err != nil {
 		log("error connecting to ORPort: %s.", err)
@@ -269,10 +271,6 @@ func listenerLoop(chain *Chain) {
 	go acceptLoop("external", chain.ExtLn, extChan)
 	go acceptLoop("internal", chain.IntLn, intChan)
 
-	// This stack is to forward externally connecting IP addresses to the
-	// extended ORPort.
-	connStack := NewStack(connStackSize)
-
 loop:
 	for {
 		select {
@@ -280,12 +278,12 @@ loop:
 			if !ok {
 				break loop
 			}
-			go handleExternalConnection(conn, connStack, chain.ProcsAddr)
+			go handleExternalConnection(conn, chain)
 		case conn, ok := <-intChan:
 			if !ok {
 				break loop
 			}
-			go handleInternalConnection(conn, connStack)
+			go handleInternalConnection(conn, chain)
 		}
 	}
 }
@@ -293,6 +291,8 @@ loop:
 func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
 	chain := &Chain{}
 	var err error
+
+	chain.Conns = NewStack(connStackSize)
 
 	// Start internal listener (the proxy chain connects back to this).
 	chain.IntLn, err = net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
