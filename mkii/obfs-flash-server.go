@@ -221,7 +221,7 @@ func copyLoop(a, b *net.TCPConn) error {
 	go func() {
 		n, err := io.Copy(b, a)
 		if err != nil {
-			log("after %d bytes from %s to %s: %s.", n, a.RemoteAddr().String(), b.RemoteAddr().String(), err)
+			log("After %d bytes from %s to %s: %s.", n, a.RemoteAddr().String(), b.RemoteAddr().String(), err)
 		}
 		a.CloseRead()
 		b.CloseWrite()
@@ -231,7 +231,7 @@ func copyLoop(a, b *net.TCPConn) error {
 	go func() {
 		n, err := io.Copy(a, b)
 		if err != nil {
-			log("after %d bytes from %s to %s: %s.", n, b.RemoteAddr().String(), a.RemoteAddr().String(), err)
+			log("After %d bytes from %s to %s: %s.", n, b.RemoteAddr().String(), a.RemoteAddr().String(), err)
 		}
 		b.CloseRead()
 		a.CloseWrite()
@@ -280,16 +280,16 @@ func handleInternalConnection(conn *net.TCPConn, chain *Chain) error {
 		return errors.New("connection stack underflow")
 	}
 	extConn := elem.(*net.TCPConn)
-	log("connecting to ORPort using remote addr %s.", extConn.RemoteAddr())
+	log("Connecting to ORPort using remote addr %s.", extConn.RemoteAddr())
 	log("handleInternalConnection: now %d conns buffered.", chain.Conns.Length())
 	or, err := pt.ConnectOr(&ptInfo, extConn, ptMethodName)
 	if err != nil {
-		log("error connecting to ORPort: %s.", err)
+		log("Error connecting to ORPort: %s.", err)
 		return err
 	}
 	err = copyLoop(or, conn)
 	if err != nil {
-		log("error copying between int and ORPort: %s.", err)
+		log("Error copying between int and ORPort: %s.", err)
 		return err
 	}
 	return nil
@@ -330,31 +330,31 @@ func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
 	// Start internal listener (the proxy chain connects back to this).
 	chain.IntLn, err = net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
-		log("error opening internal listener: %s.", err)
+		log("Error opening internal listener: %s.", err)
 		return nil, err
 	}
-	log("internal listener on %s.", chain.IntLn.Addr())
+	log("Internal listener on %s.", chain.IntLn.Addr())
 
 	// Start subprocesses.
 	chain.ProcsAddr, chain.Procs, err = startProcesses(chain.IntLn.Addr())
 	if err != nil {
-		log("error starting proxy chain: %s.", err)
+		log("Error starting proxy chain: %s.", err)
 		chain.CloseListeners()
 		return nil, err
 	}
 	procs = append(procs, chain.Procs...)
-	log("proxy chain on %s.", chain.ProcsAddr)
+	log("Proxy chain on %s.", chain.ProcsAddr)
 
 	// Start external Internet listener (listens on bindAddr and connects to
 	// proxy chain).
 	chain.ExtLn, err = net.ListenTCP("tcp", bindAddr)
 	if err != nil {
-		log("error opening external listener: %s.", err)
+		log("Error opening external listener: %s.", err)
 		chain.CloseListeners()
 		// XXX kill procs
 		return nil, err
 	}
-	log("external listener on %s.", chain.ExtLn.Addr())
+	log("External listener on %s.", chain.ExtLn.Addr())
 
 	go listenerLoop(chain)
 
