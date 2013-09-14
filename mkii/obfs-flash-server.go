@@ -79,7 +79,7 @@ func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 	return nil, errors.New(fmt.Sprintf("no SMETHOD %s found before SMETHODS DONE", methodName))
 }
 
-func startChain(connectBackAddr net.Addr) (extBindAddr *net.TCPAddr, procs []*os.Process, err error) {
+func startProcesses(connectBackAddr net.Addr) (extBindAddr *net.TCPAddr, procs []*os.Process, err error) {
 	var midBindAddr *net.TCPAddr
 	var stdout io.ReadCloser
 
@@ -284,7 +284,7 @@ loop:
 	}
 }
 
-func startListeners(bindAddr *net.TCPAddr) (*net.TCPListener, error) {
+func startChain(bindAddr *net.TCPAddr) (*net.TCPListener, error) {
 	// Start internal listener (the proxy chain connects back to this).
 	intLn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
@@ -293,8 +293,8 @@ func startListeners(bindAddr *net.TCPAddr) (*net.TCPListener, error) {
 	}
 	log("internal listener on %s.", intLn.Addr())
 
-	// Start proxy chain.
-	chainAddr, chainProcs, err := startChain(intLn.Addr())
+	// Start subprocesses.
+	chainAddr, chainProcs, err := startProcesses(intLn.Addr())
 	if err != nil {
 		log("error starting proxy chain: %s.", err)
 		intLn.Close()
@@ -365,7 +365,7 @@ func main() {
 			bindAddr.Addr.Port = port
 		}
 
-		ln, err := startListeners(bindAddr.Addr)
+		ln, err := startChain(bindAddr.Addr)
 		if err != nil {
 			pt.SmethodError(bindAddr.MethodName, err.Error())
 			continue
