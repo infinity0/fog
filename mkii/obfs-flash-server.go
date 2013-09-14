@@ -320,9 +320,6 @@ func handleInternalConnection(conn *net.TCPConn, chain *Chain) error {
 }
 
 func listenerLoop(chain *Chain) {
-	defer chain.CloseListeners()
-	// XXX defer kill procs.
-
 	extChan := make(chan *net.TCPConn)
 	intChan := make(chan *net.TCPConn)
 	go acceptLoop("external", chain.ExtLn, extChan)
