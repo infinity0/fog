@@ -82,6 +82,21 @@ type Chain struct {
 	Conns *Stack
 }
 
+func (chain *Chain) CloseListeners() {
+	if chain.ExtLn != nil {
+		err := chain.ExtLn.Close()
+		if err != nil {
+			log("Error closing external listener: %s.", err)
+		}
+	}
+	if chain.IntLn != nil {
+		err := chain.IntLn.Close()
+		if err != nil {
+			log("Error closing internal listener: %s.", err)
+		}
+	}
+}
+
 func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 	br := bufio.NewReader(r)
 	for {
@@ -281,8 +296,7 @@ func handleInternalConnection(conn *net.TCPConn, chain *Chain) error {
 }
 
 func listenerLoop(chain *Chain) {
-	defer chain.ExtLn.Close()
-	defer chain.IntLn.Close()
+	defer chain.CloseListeners()
 	// XXX defer kill procs.
 
 	extChan := make(chan *net.TCPConn)
@@ -325,7 +339,7 @@ func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
 	chain.ProcsAddr, chain.Procs, err = startProcesses(chain.IntLn.Addr())
 	if err != nil {
 		log("error starting proxy chain: %s.", err)
-		chain.IntLn.Close()
+		chain.CloseListeners()
 		return nil, err
 	}
 	procs = append(procs, chain.Procs...)
@@ -336,7 +350,7 @@ func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
 	chain.ExtLn, err = net.ListenTCP("tcp", bindAddr)
 	if err != nil {
 		log("error opening external listener: %s.", err)
-		chain.IntLn.Close()
+		chain.CloseListeners()
 		// XXX kill procs
 		return nil, err
 	}
@@ -418,8 +432,7 @@ func main() {
 	}
 	log("Got first signal %q with %d running handlers.", sig, numHandlers)
 	for _, chain := range chains {
-		chain.ExtLn.Close()
-		chain.IntLn.Close()
+		chain.CloseListeners()
 	}
 	for _, proc := range procs {
 		log("Sending signal %q to process with pid %d.", sig, proc.Pid)
