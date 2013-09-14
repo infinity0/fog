@@ -54,6 +54,26 @@ func log(format string, v ...interface{}) {
 
 type ProcList []*os.Process
 
+func (procs ProcList) Kill() {
+	for _, p := range procs {
+		log("Killing process with pid %d.", p.Pid)
+		err := p.Kill()
+		if err != nil {
+			log("Error killing process with pid %d: %s.", p.Pid, err)
+			continue
+		}
+		state, err := p.Wait()
+		if err != nil {
+			log("Error waiting on process with pid %d: %s.", state.Pid(), err)
+			continue
+		}
+		if !state.Exited() {
+			log("Process with pid %d didn't exit.", state.Pid())
+			continue
+		}
+	}
+}
+
 type Chain struct {
 	ExtLn, IntLn *net.TCPListener
 	ProcsAddr    *net.TCPAddr
@@ -95,12 +115,9 @@ func startProcesses(connectBackAddr net.Addr) (extBindAddr *net.TCPAddr, procs P
 
 	defer func() {
 		if err != nil {
-			for _, proc := range(procs) {
-				log("Killing process with pid %d.", proc.Pid)
-				proc.Kill()
-				proc.Wait()
-			}
-			procs = []*os.Process{}
+			// Kill subprocesses before returning error.
+			procs.Kill()
+			procs = procs[:0]
 		}
 	}()
 
