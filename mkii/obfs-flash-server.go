@@ -207,7 +207,7 @@ func acceptLoop(name string, ln *net.TCPListener, ch chan *net.TCPConn) {
 			log("%s accept: %s.", name, err)
 			break
 		}
-		log("%s connection from %s.", name, conn.RemoteAddr().String())
+		log("%s connection from %s.", name, conn.RemoteAddr())
 		ch <- conn
 	}
 	close(ch)
@@ -221,7 +221,7 @@ func copyLoop(a, b *net.TCPConn) error {
 	go func() {
 		n, err := io.Copy(b, a)
 		if err != nil {
-			log("After %d bytes from %s to %s: %s.", n, a.RemoteAddr().String(), b.RemoteAddr().String(), err)
+			log("After %d bytes from %s to %s: %s.", n, a.RemoteAddr(), b.RemoteAddr(), err)
 		}
 		a.CloseRead()
 		b.CloseWrite()
@@ -231,7 +231,7 @@ func copyLoop(a, b *net.TCPConn) error {
 	go func() {
 		n, err := io.Copy(a, b)
 		if err != nil {
-			log("After %d bytes from %s to %s: %s.", n, b.RemoteAddr().String(), a.RemoteAddr().String(), err)
+			log("After %d bytes from %s to %s: %s.", n, b.RemoteAddr(), a.RemoteAddr(), err)
 		}
 		b.CloseRead()
 		a.CloseWrite()
