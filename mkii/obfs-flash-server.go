@@ -79,16 +79,18 @@ func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 	return nil, errors.New(fmt.Sprintf("no SMETHOD %s found before SMETHODS DONE", methodName))
 }
 
-func startChain(connectBackAddr net.Addr) (*net.TCPAddr, error) {
-	var midBindAddr, extBindAddr *net.TCPAddr
-	var tmpProcs []*os.Process
+func startChain(connectBackAddr net.Addr) (extBindAddr *net.TCPAddr, procs []*os.Process, err error) {
+	var midBindAddr *net.TCPAddr
+	var stdout io.ReadCloser
 
 	defer func() {
-		// Something went wrong; kill the processes we started.
-		for _, proc := range tmpProcs {
-			log("Killing process with pid %d.", proc.Pid)
-			proc.Kill()
-			proc.Wait()
+		if err != nil {
+			for _, proc := range(procs) {
+				log("Killing process with pid %d.", proc.Pid)
+				proc.Kill()
+				proc.Wait()
+			}
+			procs = []*os.Process{}
 		}
 	}()
 
@@ -103,23 +105,23 @@ func startChain(connectBackAddr net.Addr) (*net.TCPAddr, error) {
 		"TOR_PT_SERVER_BINDADDR=obfs3-127.0.0.1:0",
 	}
 	log("obfsproxy environment %q", cmd.Env)
-	stdout, err := cmd.StdoutPipe()
+	stdout, err = cmd.StdoutPipe()
 	if err != nil {
 		log("Failed to open obfsproxy stdout pipe: %s.", err)
-		return nil, err
+		return
 	}
 	err = cmd.Start()
 	if err != nil {
 		log("Failed to start obfsproxy: %s.", err)
-		return nil, err
+		return
 	}
 	log("Exec %s with args %q pid %d.", cmd.Path, cmd.Args, cmd.Process.Pid)
-	tmpProcs = append(tmpProcs, cmd.Process)
+	procs = append(procs, cmd.Process)
 
 	midBindAddr, err = findBindAddr(stdout, "obfs3")
 	if err != nil {
 		log("Failed to find obfsproxy bindaddr: %s.", err)
-		return nil, err
+		return
 	}
 	log("obfsproxy bindaddr is %s.", midBindAddr)
 
@@ -136,29 +138,24 @@ func startChain(connectBackAddr net.Addr) (*net.TCPAddr, error) {
 	stdout, err = cmd.StdoutPipe()
 	if err != nil {
 		log("Failed to open websocket-server stdout pipe: %s.", err)
-		return nil, err
+		return
 	}
 	err = cmd.Start()
 	if err != nil {
 		log("Failed to start websocket-server: %s.", err)
-		return nil, err
+		return
 	}
 	log("Exec %s with args %q pid %d.", cmd.Path, cmd.Args, cmd.Process.Pid)
-	tmpProcs = append(tmpProcs, cmd.Process)
+	procs = append(procs, cmd.Process)
 
 	extBindAddr, err = findBindAddr(stdout, "websocket")
 	if err != nil {
 		log("Failed to find websocket-server bindaddr: %s.", err)
-		return nil, err
+		return
 	}
 	log("websocket-server bindaddr is %s.", extBindAddr)
 
-	// Add new processes to the global list of processes and cause them not
-	// to be killed when this function returns.
-	procs = append(procs, tmpProcs...)
-	tmpProcs = []*os.Process{}
-
-	return extBindAddr, err
+	return extBindAddr, procs, err
 }
 
 func acceptLoop(name string, ln *net.TCPListener, ch chan *net.TCPConn) {
@@ -297,12 +294,13 @@ func startListeners(bindAddr *net.TCPAddr) (*net.TCPListener, error) {
 	log("internal listener on %s.", intLn.Addr())
 
 	// Start proxy chain.
-	chainAddr, err := startChain(intLn.Addr())
+	chainAddr, chainProcs, err := startChain(intLn.Addr())
 	if err != nil {
 		log("error starting proxy chain: %s.", err)
 		intLn.Close()
 		return nil, err
 	}
+	procs = append(procs, chainProcs...)
 	log("proxy chain on %s.", chainAddr)
 
 	// Start external Internet listener (listens on bindAddr and connects to
