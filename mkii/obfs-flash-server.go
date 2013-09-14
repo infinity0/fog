@@ -377,22 +377,6 @@ func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
 	return chain, nil
 }
 
-// Returns true if all processes terminated, or false if timeout was reached.
-func awaitSubProcessTermination(timeout time.Duration) bool {
-	c := make(chan bool, 1)
-	go func() {
-		time.Sleep(timeout)
-		c <- false
-	}()
-	go func() {
-		for _, proc := range procs {
-			proc.Wait()
-		}
-		c <- true
-	}()
-	return <-c
-}
-
 func main() {
 	var logFilename string
 	var port int
@@ -475,12 +459,6 @@ func main() {
 			log("Sending signal %q to process with pid %d.", sig, proc.Pid)
 			proc.Signal(sig)
 		}
-	}
-
-	log("Waiting up to %g seconds for subprocesses to terminate.", subprocessWaitTimeout.Seconds())
-	timedout := !awaitSubProcessTermination(subprocessWaitTimeout)
-	if timedout {
-		log("Timed out.")
 	}
 
 	log("Exiting.")
