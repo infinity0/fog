@@ -26,7 +26,7 @@ var logFile = os.Stderr
 
 var ptInfo pt.ServerInfo
 
-var procs []*os.Process
+var procs ProcList
 
 // When a connection handler starts, +1 is written to this channel; when it
 // ends, -1 is written.
@@ -52,10 +52,12 @@ func log(format string, v ...interface{}) {
 	fmt.Fprintf(logFile, "%s %s\n", dateStr, msg)
 }
 
+type ProcList []*os.Process
+
 type Chain struct {
 	ExtLn, IntLn *net.TCPListener
 	ProcsAddr    *net.TCPAddr
-	Procs        []*os.Process
+	Procs        ProcList
 	// This stack forwards external IP addresses to the extended ORPort.
 	Conns *Stack
 }
@@ -87,7 +89,7 @@ func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 	return nil, errors.New(fmt.Sprintf("no SMETHOD %s found before SMETHODS DONE", methodName))
 }
 
-func startProcesses(connectBackAddr net.Addr) (extBindAddr *net.TCPAddr, procs []*os.Process, err error) {
+func startProcesses(connectBackAddr net.Addr) (extBindAddr *net.TCPAddr, procs ProcList, err error) {
 	var midBindAddr *net.TCPAddr
 	var stdout io.ReadCloser
 
