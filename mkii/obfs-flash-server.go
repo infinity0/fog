@@ -52,6 +52,12 @@ func log(format string, v ...interface{}) {
 	fmt.Fprintf(logFile, "%s %s\n", dateStr, msg)
 }
 
+type Chain struct {
+	ExtLn, IntLn *net.TCPListener
+	ProcsAddr    *net.TCPAddr
+	Procs        []*os.Process
+}
+
 func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 	br := bufio.NewReader(r)
 	for {
@@ -253,15 +259,15 @@ func handleInternalConnection(conn *net.TCPConn, connStack *Stack) error {
 	return nil
 }
 
-func listenerLoop(extLn, intLn *net.TCPListener, chainAddr *net.TCPAddr) {
-	defer extLn.Close()
-	defer intLn.Close()
+func listenerLoop(chain *Chain) {
+	defer chain.ExtLn.Close()
+	defer chain.IntLn.Close()
 	// XXX defer kill procs.
 
 	extChan := make(chan *net.TCPConn)
 	intChan := make(chan *net.TCPConn)
-	go acceptLoop("external", extLn, extChan)
-	go acceptLoop("internal", intLn, intChan)
+	go acceptLoop("external", chain.ExtLn, extChan)
+	go acceptLoop("internal", chain.IntLn, intChan)
 
 	// This stack is to forward externally connecting IP addresses to the
 	// extended ORPort.
@@ -274,7 +280,7 @@ loop:
 			if !ok {
 				break loop
 			}
-			go handleExternalConnection(conn, connStack, chainAddr)
+			go handleExternalConnection(conn, connStack, chain.ProcsAddr)
 		case conn, ok := <-intChan:
 			if !ok {
 				break loop
@@ -284,39 +290,42 @@ loop:
 	}
 }
 
-func startChain(bindAddr *net.TCPAddr) (*net.TCPListener, error) {
+func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
+	chain := &Chain{}
+	var err error
+
 	// Start internal listener (the proxy chain connects back to this).
-	intLn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	chain.IntLn, err = net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
 		log("error opening internal listener: %s.", err)
 		return nil, err
 	}
-	log("internal listener on %s.", intLn.Addr())
+	log("internal listener on %s.", chain.IntLn.Addr())
 
 	// Start subprocesses.
-	chainAddr, chainProcs, err := startProcesses(intLn.Addr())
+	chain.ProcsAddr, chain.Procs, err = startProcesses(chain.IntLn.Addr())
 	if err != nil {
 		log("error starting proxy chain: %s.", err)
-		intLn.Close()
+		chain.IntLn.Close()
 		return nil, err
 	}
-	procs = append(procs, chainProcs...)
-	log("proxy chain on %s.", chainAddr)
+	procs = append(procs, chain.Procs...)
+	log("proxy chain on %s.", chain.ProcsAddr)
 
 	// Start external Internet listener (listens on bindAddr and connects to
 	// proxy chain).
-	extLn, err := net.ListenTCP("tcp", bindAddr)
+	chain.ExtLn, err = net.ListenTCP("tcp", bindAddr)
 	if err != nil {
 		log("error opening external listener: %s.", err)
-		intLn.Close()
+		chain.IntLn.Close()
 		// XXX kill procs
 		return nil, err
 	}
-	log("external listener on %s.", extLn.Addr())
+	log("external listener on %s.", chain.ExtLn.Addr())
 
-	go listenerLoop(extLn, intLn, chainAddr)
+	go listenerLoop(chain)
 
-	return extLn, nil
+	return chain, nil
 }
 
 // Returns true if all processes terminated, or false if timeout was reached.
@@ -356,7 +365,7 @@ func main() {
 	log("Starting.")
 	ptInfo = pt.ServerSetup([]string{ptMethodName})
 
-	listeners := make([]*net.TCPListener, 0)
+	chains := make([]*Chain, 0)
 	for _, bindAddr := range ptInfo.BindAddrs {
 		// Override tor's requested port (which is 0 if this transport
 		// has not been run before) with the one requested by the --port
@@ -365,13 +374,13 @@ func main() {
 			bindAddr.Addr.Port = port
 		}
 
-		ln, err := startChain(bindAddr.Addr)
+		chain, err := startChain(bindAddr.Addr)
 		if err != nil {
 			pt.SmethodError(bindAddr.MethodName, err.Error())
 			continue
 		}
-		pt.Smethod(bindAddr.MethodName, ln.Addr())
-		listeners = append(listeners, ln)
+		pt.Smethod(bindAddr.MethodName, chain.ExtLn.Addr())
+		chains = append(chains, chain)
 	}
 	pt.SmethodsDone()
 
@@ -389,8 +398,9 @@ func main() {
 		}
 	}
 	log("Got first signal %q with %d running handlers.", sig, numHandlers)
-	for _, ln := range listeners {
-		ln.Close()
+	for _, chain := range chains {
+		chain.ExtLn.Close()
+		chain.IntLn.Close()
 	}
 	for _, proc := range procs {
 		log("Sending signal %q to process with pid %d.", sig, proc.Pid)
