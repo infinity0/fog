@@ -10,7 +10,7 @@ func TestZeroCapacity(t *testing.T) {
 	if s.Length() != 0 {
 		t.Fatal("initial length is not 0")
 	}
-	ok = s.Push("a")
+	_, ok = s.Push("a")
 	if ok || s.Length() != 0 {
 		t.Fatal()
 	}
@@ -30,11 +30,11 @@ func TestPushPop(t *testing.T) {
 	if s.Length() != 0 {
 		t.Fatal("initial length is not 0")
 	}
-	ok = s.Push("a")
+	_, ok = s.Push("a")
 	if !ok || s.Length() != 1 {
 		t.Fatal()
 	}
-	s.Push("b")
+	_, ok = s.Push("b")
 	if !ok || s.Length() != 2 {
 		t.Fatal()
 	}
@@ -55,16 +55,19 @@ func TestPushPop(t *testing.T) {
 	}
 
 	// Push to capacity.
-	if !s.Push("c") || !s.Push("d") || !s.Push("e") {
-		t.Fatal()
-	}
-	if s.Length() != 3 {
+	s.Push("c")
+	s.Push("d")
+	_, ok = s.Push("e")
+	if !ok || s.Length() != 3 {
 		t.Fatal("push to capacity is not at capacity")
 	}
 	// Push one past capacity.
-	ok = s.Push("f")
+	x, ok = s.Push("f")
 	if ok || s.Length() != 3 {
 		t.Fatal()
+	}
+	if x != "c" {
+		t.Fatal("mismatch in overwritten element")
 	}
 
 	// Pop to empty.

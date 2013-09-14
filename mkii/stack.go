@@ -29,18 +29,19 @@ func (s *Stack) Length() int {
 	return s.clamp(s.head - s.base)
 }
 
-// The return value is false if this push caused the least recently added element
-// to be discarded, true otherwise.
-func (s *Stack) Push(x interface{}) bool {
+// If this push causes the stack to overflow, the first return value is the
+// discarded element and the second return value is false. Otherwise the second
+// return value is true.
+func (s *Stack) Push(x interface{}) (interface{}, bool) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	s.buf[s.head] = x
 	s.head = s.clamp(s.head + 1)
 	if s.head == s.base {
 		s.base = s.clamp(s.base + 1)
-		return false
+		return s.buf[s.head], false
 	}
-	return true
+	return nil, true
 }
 
 // The second return value is false if the stack was empty, and true otherwise.
