@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-import "git.torproject.org/flashproxy.git/websocket-transport/src/pt"
+import "git.torproject.org/pluggable-transports/websocket.git/src/pt"
 
 const ptMethodName = "obfs3_flash"
 const connStackSize = 10
