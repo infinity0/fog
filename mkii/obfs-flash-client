@@ -198,7 +198,7 @@ def pt_require_child(client, childmethod, cmethods):
         raise ValueError()
     return cmethods[childmethod]
 
-def obfs3_flash(reactor, client, obfs_out, fp_remote, fp_local=0):
+def obfs3_flash(reactor, client, obfs_out, fp_remote, fp_args=[], fp_local=0):
     """
     Set up the obfs3_flash combined PT.
 
@@ -213,7 +213,8 @@ def obfs3_flash(reactor, client, obfs_out, fp_remote, fp_local=0):
 
     # start fp and ensure that it launches OK
     _, _, fp_defer = pt_launch_child(reactor, client,
-        ["websocket"], [fp_client, '127.0.0.1:%s' % fp_local, fp_remote])
+        ["websocket"], [fp_client, "--transport", "obfs3|websocket"] + fp_args +
+                       ['127.0.0.1:%s' % fp_local, fp_remote])
 
     # start ob and ensure that it launches OK
     _, _, ob_defer = pt_launch_child(reactor, client,
@@ -246,6 +247,8 @@ def main(*args):
     parser.add_argument("fp_remote", help="remote connections listen address "
         "for flashproxy, default %(default)s",
         metavar='REMOTE:PORT', nargs='?', default=":9000")
+    parser.add_argument("--fp-arg", help="arguments for flashproxy-client",
+        metavar='ARG', action='append')
     # TODO(infinity0): add an "external" mode, which would require us to run
     # obfsproxy in external mode too.
 
@@ -261,7 +264,7 @@ def main(*args):
 
     from twisted.internet import reactor
     auto_killall(1, cleanup=reactor.stop)
-    obfs3_flash(reactor, client, opts.obfs_out, opts.fp_remote)
+    obfs3_flash(reactor, client, opts.obfs_out, opts.fp_remote, opts.fp_arg or [])
     reactor.run(installSignalHandlers=0)
     return 0
 
