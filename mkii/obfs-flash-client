@@ -22,7 +22,7 @@ from twisted.protocols.portforward import ProxyServer as _ProxyServer
 from twisted.python import log
 from txsocksx.client import SOCKS4ClientEndpoint
 
-PT_METHOD_NAME = "obfs3_flash"
+PT_METHOD_NAME = "obfs3_flashproxy"
 
 def pt_child_env(managed_ver, env=os.environ):
     """
@@ -198,9 +198,9 @@ def pt_require_child(client, childmethod, cmethods):
         raise ValueError()
     return cmethods[childmethod]
 
-def obfs3_flash(reactor, client, obfs_out, fp_remote, fp_args=[], fp_local=0):
+def obfs3_flashproxy(reactor, client, obfs_out, fp_remote, fp_args=[], fp_local=0):
     """
-    Set up the obfs3_flash combined PT.
+    Set up the obfs3_flashproxy combined PT.
 
     :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
     :param pyptlib.client.ClientTransportPlugin client: PT client API.
@@ -213,7 +213,7 @@ def obfs3_flash(reactor, client, obfs_out, fp_remote, fp_args=[], fp_local=0):
 
     # start fp and ensure that it launches OK
     _, _, fp_defer = pt_launch_child(reactor, client,
-        ["websocket"], [fp_client, "--transport", "obfs3|websocket"] + fp_args +
+        ["flashproxy"], [fp_client, "--transport", "obfs3|websocket"] + fp_args +
                        ['127.0.0.1:%s' % fp_local, fp_remote])
 
     # start ob and ensure that it launches OK
@@ -225,7 +225,7 @@ def obfs3_flash(reactor, client, obfs_out, fp_remote, fp_args=[], fp_local=0):
         success = all(r[0] for r in success_list)
         # failure was already reported by pt_require_child, just return
         if not success: return
-        fp_result = [r[1] for r in success_list if r[1].name == "websocket"][0]
+        fp_result = [r[1] for r in success_list if r[1].name == "flashproxy"][0]
         ob_result = [r[1] for r in success_list if r[1].name == "obfs3"][0]
 
         fp_port = fp_result.addrport[1] # if port was 0, read the actual port
@@ -264,7 +264,7 @@ def main(*args):
 
     from twisted.internet import reactor
     auto_killall(1, cleanup=reactor.stop)
-    obfs3_flash(reactor, client, opts.obfs_out, opts.fp_remote, opts.fp_arg or [])
+    obfs3_flashproxy(reactor, client, opts.obfs_out, opts.fp_remote, opts.fp_arg or [])
     reactor.run(installSignalHandlers=0)
     return 0
 

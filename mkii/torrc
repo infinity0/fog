@@ -1,7 +1,7 @@
 UseBridges 1
-Bridge obfs3_flash 127.0.0.1:2334
+Bridge obfs3_flashproxy 127.0.0.1:2334
 LearnCircuitBuildTimeout 0
 CircuitBuildTimeout 300
-ClientTransportPlugin obfs3_flash exec ./obfs-flash-client 2334
+ClientTransportPlugin obfs3_flashproxy exec ./obfs-flash-client 2334
 # use a different facilitator
-#ClientTransportPlugin obfs3_flash exec ./obfs-flash-client --fp-arg=-f --fp-arg=http://siteb.fp-facilitator.org/fac/ --fp-arg=--register-methods=http 2334
+#ClientTransportPlugin obfs3_flashproxy exec ./obfs-flash-client --fp-arg=-f --fp-arg=http://siteb.fp-facilitator.org/fac/ --fp-arg=--register-methods=http 2334
