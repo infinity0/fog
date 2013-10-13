@@ -18,7 +18,7 @@ import (
 
 import "git.torproject.org/pluggable-transports/websocket.git/src/pt"
 
-const ptMethodName = "obfs3_flash"
+const ptMethodName = "obfs3_websocket"
 const connStackSize = 10
 const subprocessWaitTimeout = 30 * time.Second
 

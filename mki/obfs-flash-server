@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Usage: Put this in torrc:
-# ServerTransportPlugin obfs3_flash exec /path/to/obfs-flash-server
+# ServerTransportPlugin obfs3_websocket exec /path/to/obfs-flash-server
 
 : ${WEBSOCKET_SERVER:=websocket-server}
 : ${OBFSPROXY:=obfsproxy}
@@ -16,7 +16,7 @@ if [ "$TOR_PT_MANAGED_TRANSPORT_VER" != "1" ]; then
 fi
 echo VERSION 1
 
-if [ "$TOR_PT_SERVER_TRANSPORTS" != "obfs3_flash" -a "$TOR_PT_SERVER_TRANSPORTS" != "*" ]; then
+if [ "$TOR_PT_SERVER_TRANSPORTS" != "obfs3_websocket" -a "$TOR_PT_SERVER_TRANSPORTS" != "*" ]; then
 	echo SMETHODS DONE
 	exit 1
 fi
@@ -48,6 +48,6 @@ env TOR_PT_MANAGED_TRANSPORT_VER=1 \
 	TOR_PT_ORPORT="127.0.0.1:$MID_PORT" \
 	TOR_PT_SERVER_TRANSPORTS=websocket \
 	TOR_PT_SERVER_BINDADDR="websocket-$BINDADDR" \
-	"$WEBSOCKET_SERVER" | gawk '/^SMETHOD / {print $1 " obfs3_flash " $3; print "SMETHODS DONE"; fflush();}' &
+	"$WEBSOCKET_SERVER" | gawk '/^SMETHOD / {print $1 " obfs3_websocket " $3; print "SMETHODS DONE"; fflush();}' &
 
 wait %%

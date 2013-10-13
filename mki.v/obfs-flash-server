@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # Usage: Put this in torrc:
-# ServerTransportPlugin obfs3_flash exec /usr/local/bin/obfs-flash-server
+# ServerTransportPlugin obfs3_websocket exec /usr/local/bin/obfs-flash-server
 
 import getopt
 import os
@@ -13,7 +13,7 @@ import pyptlib.config
 import pyptlib.server
 import pyptlib.util
 
-PT_METHOD_NAME = "obfs3_flash"
+PT_METHOD_NAME = "obfs3_websocket"
 
 WEBSOCKET_SERVER = "websocket-server"
 OBFSPROXY = "obfsproxy"
