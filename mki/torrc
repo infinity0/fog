@@ -1,5 +1,0 @@
-UseBridges 1
-Bridge obfs3_flashproxy 127.0.0.1:2334
-LearnCircuitBuildTimeout 0
-CircuitBuildTimeout 300
-ClientTransportPlugin obfs3_flashproxy exec ./obfs-flash-client

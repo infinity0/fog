@@ -1,4 +1,0 @@
-ORPort 9001
-BridgeRelay 1
-SocksPort 0
-ServerTransportPlugin obfs3_websocket exec ./obfs-flash-server
