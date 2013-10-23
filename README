@@ -1,3 +1,16 @@
+# Using the client
+
+Run-time dependencies:
+* python-pyptlib
+* python-twisted-core
+* python-txsocksx
+  * python-parsley
+  * python-twisted-core
+  * python-twisted-web
+  * python-zope.interface
+
+# Using the server
+
 export GOPATH=$(pwd)
 go get
 make
