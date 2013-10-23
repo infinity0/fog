@@ -185,7 +185,8 @@ def pt_launch_child(reactor, client, methodnames, cmdline):
         }.items()),
         )
     sub_protocol = ManagedTransportProtocolV1()
-    StandardIO(sub_protocol, stdin=sub_proc.stdout.fileno(), reactor=reactor)
+    # we ought to pass reactor=reactor in below, but this breaks Twisted 12
+    StandardIO(sub_protocol, stdin=sub_proc.stdout.fileno())
     methoddefers = [sub_protocol.whenCMethodsDone().addCallback(
                         partial(pt_require_child, client, name))
                     for name in methodnames]
