@@ -175,6 +175,46 @@ class SOCKS4WrapperFactory(Factory):
         self.remote_host = remote_host
         self.remote_port = remote_port
 
+if sys.platform == "win32":
+    # TODO(infinity0): push this upstream to Twisted
+    from twisted.internet import _pollingfile
+    import msvcrt
+
+    _StandardIO = StandardIO
+    class StandardIO(_StandardIO):
+
+        def __init__(self, proto, stdin=None, stdout=None, reactor=None):
+            """
+            Start talking to standard IO with the given protocol.
+
+            Also, put it stdin/stdout/stderr into binary mode.
+            """
+            if reactor is None:
+                import twisted.internet.reactor
+                reactor = twisted.internet.reactor
+
+            _pollingfile._PollingTimer.__init__(self, reactor)
+            self.proto = proto
+
+            fdstdin = stdin or sys.stdin.fileno()
+            fdstdout = stdout or sys.stdout.fileno()
+
+            for stdfd in (fdstdin, fdstdout):
+                msvcrt.setmode(stdfd, os.O_BINARY)
+
+            hstdin = msvcrt.get_osfhandle(fdstdin)
+            self.stdin = _pollingfile._PollableReadPipe(
+                hstdin, self.dataReceived, self.readConnectionLost)
+
+            hstdout = msvcrt.get_osfhandle(fdstdout)
+            self.stdout = _pollingfile._PollableWritePipe(
+                hstdout, self.writeConnectionLost)
+
+            self._addPollableResource(self.stdin)
+            self._addPollableResource(self.stdout)
+
+            self.proto.makeConnection(self)
+
 def pt_launch_child(reactor, client, methodnames, cmdline):
     """Launch a child PT and ensure it has the right transport methods."""
     cur_env = pt_child_env(ManagedTransportProtocolV1.protocol_version)
