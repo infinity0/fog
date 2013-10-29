@@ -7,6 +7,8 @@ import sys
 from collections import namedtuple
 from functools import partial
 
+if sys.platform == 'win32':
+    os.environ["KILL_CHILDREN_ON_DEATH"] = "1"
 from pyptlib.util import parse_addr_spec
 from pyptlib.util.subproc import auto_killall, Popen
 from pyptlib.client import ClientTransportPlugin
