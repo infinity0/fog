@@ -155,7 +155,7 @@ type ServerTransportPlugin struct {
 	Command    []string
 }
 
-func startProcesses(connectBackAddr net.Addr) (bindAddr *net.TCPAddr, procs ProcList, err error) {
+func startProcesses(connectBackAddr net.Addr, plugins []ServerTransportPlugin) (bindAddr *net.TCPAddr, procs ProcList, err error) {
 	var stdout io.ReadCloser
 
 	defer func() {
@@ -165,11 +165,6 @@ func startProcesses(connectBackAddr net.Addr) (bindAddr *net.TCPAddr, procs Proc
 			procs = procs[:0]
 		}
 	}()
-
-	plugins := []ServerTransportPlugin{
-		{"obfs3", []string{"obfsproxy", "managed"}},
-		{"websocket", []string{"websocket-server"}},
-	}
 
 	bindAddr = connectBackAddr.(*net.TCPAddr)
 	for _, plugin := range plugins {
@@ -327,7 +322,7 @@ loop:
 	}
 }
 
-func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
+func startChain(bindAddr *net.TCPAddr, plugins []ServerTransportPlugin) (*Chain, error) {
 	chain := &Chain{}
 	var err error
 
@@ -343,7 +338,7 @@ func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
 	log("Internal listener on %s.", chain.IntLn.Addr())
 
 	// Start subprocesses.
-	chain.ProcsAddr, chain.Procs, err = startProcesses(chain.IntLn.Addr())
+	chain.ProcsAddr, chain.Procs, err = startProcesses(chain.IntLn.Addr(), plugins)
 	if err != nil {
 		log("Error starting proxy chain: %s.", err)
 		chain.Shutdown()
@@ -366,6 +361,59 @@ func startChain(bindAddr *net.TCPAddr) (*Chain, error) {
 	return chain, nil
 }
 
+type Configuration struct {
+	// Map from method names to command strings.
+	Transports map[string][]string
+	// Map from tor-friendly names like "obfs3_websocket" to systematic
+	// names like "obfs3|websocket".
+	Aliases map[string]string
+}
+
+func (conf *Configuration) MethodNames() []string {
+	result := make([]string, 0)
+	// We understand all the single transports
+	for k, _ := range conf.Transports {
+		result = append(result, k)
+	}
+	// and aliases.
+	for k, _ := range conf.Aliases {
+		result = append(result, k)
+	}
+	return result
+}
+
+// Parse a (possibly composed) method name into a slice of single method names.
+func (conf *Configuration) ParseMethodName(methodName string) []string {
+	if name, ok := conf.Aliases[methodName]; ok {
+		methodName = name
+	}
+	return strings.Split(methodName, "|")
+}
+
+func (conf *Configuration) PluginList(methodName string) ([]ServerTransportPlugin, error) {
+	names := conf.ParseMethodName(methodName)
+	stp := make([]ServerTransportPlugin, 0)
+	for _, name := range names {
+		command, ok := conf.Transports[name]
+		if !ok {
+			return nil, errors.New(fmt.Sprintf("no transport named %q", name))
+		}
+		stp = append(stp, ServerTransportPlugin{name, command})
+	}
+	return stp, nil
+}
+
+// Simulate loading a configuration file.
+func getConfiguration() (conf *Configuration) {
+	conf = new(Configuration)
+	conf.Transports = make(map[string][]string)
+	conf.Aliases = make(map[string]string)
+	conf.Transports["obfs3"] = []string{"obfsproxy", "managed"}
+	conf.Transports["websocket"] = []string{"websocket-server"}
+	conf.Aliases["obfs3_websocket"] = "obfs3|websocket"
+	return conf
+}
+
 func main() {
 	var logFilename string
 	var port int
@@ -385,7 +433,9 @@ func main() {
 	}
 
 	log("Starting.")
-	ptInfo = pt.ServerSetup([]string{ptMethodName})
+
+	conf := getConfiguration()
+	ptInfo = pt.ServerSetup(conf.MethodNames())
 
 	chains := make([]*Chain, 0)
 	for _, bindAddr := range ptInfo.BindAddrs {
@@ -396,7 +446,13 @@ func main() {
 			bindAddr.Addr.Port = port
 		}
 
-		chain, err := startChain(bindAddr.Addr)
+		plugins, err := conf.PluginList(bindAddr.MethodName)
+		if err != nil {
+			pt.SmethodError(bindAddr.MethodName, err.Error())
+			continue
+		}
+
+		chain, err := startChain(bindAddr.Addr, plugins)
 		if err != nil {
 			pt.SmethodError(bindAddr.MethodName, err.Error())
 			continue
