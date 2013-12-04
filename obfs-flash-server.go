@@ -148,8 +148,14 @@ func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 	return nil, errors.New(fmt.Sprintf("no SMETHOD %s found before SMETHODS DONE", methodName))
 }
 
-func startProcesses(connectBackAddr net.Addr) (extBindAddr *net.TCPAddr, procs ProcList, err error) {
-	var midBindAddr *net.TCPAddr
+// Represents a server transport plugin configuration like:
+// 	ServerTransportPlugin MethodName exec Command
+type ServerTransportPlugin struct {
+	MethodName string
+	Command    []string
+}
+
+func startProcesses(connectBackAddr net.Addr) (bindAddr *net.TCPAddr, procs ProcList, err error) {
 	var stdout io.ReadCloser
 
 	defer func() {
@@ -160,69 +166,47 @@ func startProcesses(connectBackAddr net.Addr) (extBindAddr *net.TCPAddr, procs P
 		}
 	}()
 
-	// obfsproxy talks to connectBackAddr and listens on midBindAddr.
-	cmd := exec.Command("obfsproxy", "managed")
-	cmd.Env = []string{
-		"TOR_PT_MANAGED_TRANSPORT_VER=1",
-		"TOR_PT_STATE_LOCATION=" + os.Getenv("TOR_PT_STATE_LOCATION"),
-		"TOR_PT_EXTENDED_SERVER_PORT=",
-		"TOR_PT_ORPORT=" + connectBackAddr.String(),
-		"TOR_PT_SERVER_TRANSPORTS=obfs3",
-		"TOR_PT_SERVER_BINDADDR=obfs3-127.0.0.1:0",
+	plugins := []ServerTransportPlugin{
+		{"obfs3", []string{"obfsproxy", "managed"}},
+		{"websocket", []string{"websocket-server"}},
 	}
-	log("obfsproxy environment %q", cmd.Env)
-	stdout, err = cmd.StdoutPipe()
-	if err != nil {
-		log("Failed to open obfsproxy stdout pipe: %s.", err)
-		return
-	}
-	err = cmd.Start()
-	if err != nil {
-		log("Failed to start obfsproxy: %s.", err)
-		return
-	}
-	log("Exec %s with args %q pid %d.", cmd.Path, cmd.Args, cmd.Process.Pid)
-	procs = append(procs, cmd.Process)
 
-	midBindAddr, err = findBindAddr(stdout, "obfs3")
-	if err != nil {
-		log("Failed to find obfsproxy bindaddr: %s.", err)
-		return
-	}
-	log("obfsproxy bindaddr is %s.", midBindAddr)
+	bindAddr = connectBackAddr.(*net.TCPAddr)
+	for _, plugin := range plugins {
+		// This plugin has its TOR_PT_ORPORT set to the previous
+		// bindAddr.
+		cmd := exec.Command(plugin.Command[0], plugin.Command[1:]...)
+		cmd.Env = []string{
+			"TOR_PT_MANAGED_TRANSPORT_VER=1",
+			"TOR_PT_STATE_LOCATION=" + os.Getenv("TOR_PT_STATE_LOCATION"),
+			"TOR_PT_EXTENDED_SERVER_PORT=",
+			"TOR_PT_ORPORT=" + bindAddr.String(),
+			"TOR_PT_SERVER_TRANSPORTS=" + plugin.MethodName,
+			"TOR_PT_SERVER_BINDADDR=" + plugin.MethodName + "-127.0.0.1:0",
+		}
+		log("%s environment %q", cmd.Args[0], cmd.Env)
+		stdout, err = cmd.StdoutPipe()
+		if err != nil {
+			log("Failed to open %s stdout pipe: %s.", cmd.Args[0], err)
+			return
+		}
+		err = cmd.Start()
+		if err != nil {
+			log("Failed to start %s: %s.", cmd.Args[0], err)
+			return
+		}
+		log("Exec %s with args %q pid %d.", cmd.Path, cmd.Args, cmd.Process.Pid)
+		procs = append(procs, cmd.Process)
 
-	// websocket-server talks to midBindAddr and listens on extBindAddr.
-	cmd = exec.Command("websocket-server")
-	cmd.Env = []string{
-		"TOR_PT_MANAGED_TRANSPORT_VER=1",
-		"TOR_PT_STATE_LOCATION=" + os.Getenv("TOR_PT_STATE_LOCATION"),
-		"TOR_PT_EXTENDED_SERVER_PORT=",
-		"TOR_PT_ORPORT=" + midBindAddr.String(),
-		"TOR_PT_SERVER_TRANSPORTS=websocket",
-		"TOR_PT_SERVER_BINDADDR=websocket-127.0.0.1:0",
+		bindAddr, err = findBindAddr(stdout, plugin.MethodName)
+		if err != nil {
+			log("Failed to find %s bindaddr: %s.", cmd.Args[0], err)
+			return
+		}
+		log("%s bindaddr is %s.", cmd.Args[0], bindAddr)
 	}
-	log("websocket-server environment %q", cmd.Env)
-	stdout, err = cmd.StdoutPipe()
-	if err != nil {
-		log("Failed to open websocket-server stdout pipe: %s.", err)
-		return
-	}
-	err = cmd.Start()
-	if err != nil {
-		log("Failed to start websocket-server: %s.", err)
-		return
-	}
-	log("Exec %s with args %q pid %d.", cmd.Path, cmd.Args, cmd.Process.Pid)
-	procs = append(procs, cmd.Process)
 
-	extBindAddr, err = findBindAddr(stdout, "websocket")
-	if err != nil {
-		log("Failed to find websocket-server bindaddr: %s.", err)
-		return
-	}
-	log("websocket-server bindaddr is %s.", extBindAddr)
-
-	return extBindAddr, procs, err
+	return bindAddr, procs, err
 }
 
 func acceptLoop(name string, ln *net.TCPListener, ch chan *net.TCPConn) {
