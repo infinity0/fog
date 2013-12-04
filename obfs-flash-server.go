@@ -18,7 +18,6 @@ import (
 
 import "git.torproject.org/pluggable-transports/websocket.git/src/pt"
 
-const ptMethodName = "obfs3_websocket"
 const connStackSize = 10
 const subprocessWaitTimeout = 30 * time.Second
 
@@ -83,6 +82,7 @@ func (procs ProcList) Kill() {
 }
 
 type Chain struct {
+	MethodName   string
 	ExtLn, IntLn *net.TCPListener
 	ProcsAddr    *net.TCPAddr
 	Procs        ProcList
@@ -286,7 +286,7 @@ func handleInternalConnection(conn *net.TCPConn, chain *Chain) error {
 	extConn := elem.(*net.TCPConn)
 	log("Connecting to ORPort using remote addr %s.", extConn.RemoteAddr())
 	log("handleInternalConnection: now %d conns buffered.", chain.Conns.Length())
-	or, err := pt.ConnectOr(&ptInfo, extConn, ptMethodName)
+	or, err := pt.ConnectOr(&ptInfo, extConn, chain.MethodName)
 	if err != nil {
 		log("Error connecting to ORPort: %s.", err)
 		return err
@@ -322,10 +322,11 @@ loop:
 	}
 }
 
-func startChain(bindAddr *net.TCPAddr, plugins []ServerTransportPlugin) (*Chain, error) {
+func startChain(methodName string, bindAddr *net.TCPAddr, plugins []ServerTransportPlugin) (*Chain, error) {
 	chain := &Chain{}
 	var err error
 
+	chain.MethodName = methodName
 	chain.Conns = NewStack(connStackSize)
 
 	// Start internal listener (the proxy chain connects back to this).
@@ -452,7 +453,7 @@ func main() {
 			continue
 		}
 
-		chain, err := startChain(bindAddr.Addr, plugins)
+		chain, err := startChain(bindAddr.MethodName, bindAddr.Addr, plugins)
 		if err != nil {
 			pt.SmethodError(bindAddr.MethodName, err.Error())
 			continue
