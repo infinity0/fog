@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-import "git.torproject.org/pluggable-transports/websocket.git/src/pt"
+import "git.torproject.org/pluggable-transports/goptlib.git"
 
 const connStackSize = 10
 const subprocessWaitTimeout = 30 * time.Second
@@ -136,11 +136,11 @@ func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 		keyword := fields[0]
 		args := fields[1:]
 		if keyword == "SMETHOD" && len(args) >= 2 && args[0] == methodName {
-			bindAddr, err := net.ResolveTCPAddr("tcp", args[1])
+			bindaddr, err := net.ResolveTCPAddr("tcp", args[1])
 			if err != nil {
 				return nil, err
 			}
-			return bindAddr, nil
+			return bindaddr, nil
 		} else if keyword == "SMETHODS" && len(args) == 1 && args[0] == "DONE" {
 			break
 		}
@@ -286,7 +286,7 @@ func handleInternalConnection(conn *net.TCPConn, chain *Chain) error {
 	extConn := elem.(*net.TCPConn)
 	log("Connecting to ORPort using remote addr %s.", extConn.RemoteAddr())
 	log("handleInternalConnection: now %d conns buffered.", chain.Conns.Length())
-	or, err := pt.ConnectOr(&ptInfo, extConn, chain.MethodName)
+	or, err := pt.DialOr(&ptInfo, extConn.RemoteAddr().String(), chain.MethodName)
 	if err != nil {
 		log("Error connecting to ORPort: %s.", err)
 		return err
@@ -322,7 +322,7 @@ loop:
 	}
 }
 
-func startChain(methodName string, bindAddr *net.TCPAddr, plugins []ServerTransportPlugin) (*Chain, error) {
+func startChain(methodName string, bindaddr *net.TCPAddr, plugins []ServerTransportPlugin) (*Chain, error) {
 	chain := &Chain{}
 	var err error
 
@@ -347,9 +347,9 @@ func startChain(methodName string, bindAddr *net.TCPAddr, plugins []ServerTransp
 	}
 	log("Proxy chain on %s.", chain.ProcsAddr)
 
-	// Start external Internet listener (listens on bindAddr and connects to
+	// Start external Internet listener (listens on bindaddr and connects to
 	// proxy chain).
-	chain.ExtLn, err = net.ListenTCP("tcp", bindAddr)
+	chain.ExtLn, err = net.ListenTCP("tcp", bindaddr)
 	if err != nil {
 		log("Error opening external listener: %s.", err)
 		chain.Shutdown()
@@ -435,30 +435,35 @@ func main() {
 
 	log("Starting.")
 
+	var err error
 	conf := getConfiguration()
-	ptInfo = pt.ServerSetup(conf.MethodNames())
+	ptInfo, err = pt.ServerSetup(conf.MethodNames())
+	if err != nil {
+		log("Error in ServerSetup: %s", err)
+		os.Exit(1)
+	}
 
 	chains := make([]*Chain, 0)
-	for _, bindAddr := range ptInfo.BindAddrs {
+	for _, bindaddr := range ptInfo.Bindaddrs {
 		// Override tor's requested port (which is 0 if this transport
 		// has not been run before) with the one requested by the --port
 		// option.
 		if port != 0 {
-			bindAddr.Addr.Port = port
+			bindaddr.Addr.Port = port
 		}
 
-		plugins, err := conf.PluginList(bindAddr.MethodName)
+		plugins, err := conf.PluginList(bindaddr.MethodName)
 		if err != nil {
-			pt.SmethodError(bindAddr.MethodName, err.Error())
+			pt.SmethodError(bindaddr.MethodName, err.Error())
 			continue
 		}
 
-		chain, err := startChain(bindAddr.MethodName, bindAddr.Addr, plugins)
+		chain, err := startChain(bindaddr.MethodName, bindaddr.Addr, plugins)
 		if err != nil {
-			pt.SmethodError(bindAddr.MethodName, err.Error())
+			pt.SmethodError(bindaddr.MethodName, err.Error())
 			continue
 		}
-		pt.Smethod(bindAddr.MethodName, chain.ExtLn.Addr())
+		pt.Smethod(bindaddr.MethodName, chain.ExtLn.Addr())
 		chains = append(chains, chain)
 	}
 	pt.SmethodsDone()
