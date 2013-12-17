@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"sort"
 	"time"
 )
 
@@ -146,6 +147,30 @@ func findBindAddr(r io.Reader, methodName string) (*net.TCPAddr, error) {
 		}
 	}
 	return nil, errors.New(fmt.Sprintf("no SMETHOD %s found before SMETHODS DONE", methodName))
+}
+
+// Escape a string for a ServerTransportOptions serialization.
+func escape(s string) string {
+	repl := strings.NewReplacer(":", "\\:", ";", "\\;", "=", "\\=", "\\", "\\\\")
+	return repl.Replace(s)
+}
+
+func encodeServerTransportOptions(methodName string, opts pt.Args) string {
+	if opts == nil {
+		return ""
+	}
+	keys := make([]string, 0, len(opts))
+	for key, _ := range opts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		for _, value := range opts[key] {
+			parts = append(parts, escape(methodName) + ":" + escape(key) + "=" + escape(value))
+		}
+	}
+	return strings.Join(parts, ";")
 }
 
 // Represents a server transport plugin configuration like:
@@ -365,6 +390,8 @@ func startChain(methodName string, bindaddr *net.TCPAddr, plugins []ServerTransp
 type Configuration struct {
 	// Map from method names to command strings.
 	Transports map[string][]string
+	// Map from method names to ServerTransportOptions.
+	Options map[string]pt.Args
 	// Map from tor-friendly names like "obfs3_websocket" to systematic
 	// names like "obfs3|websocket".
 	Aliases map[string]string
@@ -409,6 +436,7 @@ func getConfiguration() (conf *Configuration) {
 	conf = new(Configuration)
 	conf.Transports = make(map[string][]string)
 	conf.Aliases = make(map[string]string)
+	conf.Options = make(map[string]pt.Args)
 	conf.Transports["obfs3"] = []string{"obfsproxy", "managed"}
 	conf.Transports["websocket"] = []string{"websocket-server"}
 	conf.Aliases["obfs3_websocket"] = "obfs3|websocket"
