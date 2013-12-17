@@ -442,6 +442,8 @@ func getConfiguration() (conf *Configuration) {
 	conf.Options = make(map[string]pt.Args)
 	conf.Transports["obfs3"] = []string{"obfsproxy", "managed"}
 	conf.Transports["websocket"] = []string{"websocket-server"}
+	// conf.Options["obfs3"] = make(pt.Args)
+	// conf.Options["obfs3"]["secret"] = []string{"foo"}
 	conf.Aliases["obfs3_websocket"] = "obfs3|websocket"
 	return conf
 }
