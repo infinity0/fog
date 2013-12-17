@@ -178,6 +178,7 @@ func encodeServerTransportOptions(methodName string, opts pt.Args) string {
 type ServerTransportPlugin struct {
 	MethodName string
 	Command    []string
+	Options    pt.Args
 }
 
 func startProcesses(connectBackAddr net.Addr, plugins []ServerTransportPlugin) (bindAddr *net.TCPAddr, procs ProcList, err error) {
@@ -202,6 +203,7 @@ func startProcesses(connectBackAddr net.Addr, plugins []ServerTransportPlugin) (
 			"TOR_PT_EXTENDED_SERVER_PORT=",
 			"TOR_PT_ORPORT=" + bindAddr.String(),
 			"TOR_PT_SERVER_TRANSPORTS=" + plugin.MethodName,
+			"TOR_PT_SERVER_TRANSPORT_OPTIONS=" + encodeServerTransportOptions(plugin.MethodName, plugin.Options),
 			"TOR_PT_SERVER_BINDADDR=" + plugin.MethodName + "-127.0.0.1:0",
 		}
 		log("%s environment %q", cmd.Args[0], cmd.Env)
@@ -426,7 +428,8 @@ func (conf *Configuration) PluginList(methodName string) ([]ServerTransportPlugi
 		if !ok {
 			return nil, errors.New(fmt.Sprintf("no transport named %q", name))
 		}
-		stp = append(stp, ServerTransportPlugin{name, command})
+		options := conf.Options[name]
+		stp = append(stp, ServerTransportPlugin{name, command, options})
 	}
 	return stp, nil
 }
