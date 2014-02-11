@@ -7,6 +7,7 @@ import sys
 from collections import namedtuple
 from functools import partial
 
+# TODO(infinity0): this is temporary workaround until we do #10047
 if sys.platform == 'win32':
     os.environ["KILL_CHILDREN_ON_DEATH"] = "1"
 from pyptlib.util import parse_addr_spec
