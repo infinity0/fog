@@ -203,8 +203,11 @@ func startProcesses(connectBackAddr net.Addr, plugins []ServerTransportPlugin) (
 			"TOR_PT_EXTENDED_SERVER_PORT=",
 			"TOR_PT_ORPORT=" + bindAddr.String(),
 			"TOR_PT_SERVER_TRANSPORTS=" + plugin.MethodName,
-			"TOR_PT_SERVER_TRANSPORT_OPTIONS=" + encodeServerTransportOptions(plugin.MethodName, plugin.Options),
 			"TOR_PT_SERVER_BINDADDR=" + plugin.MethodName + "-127.0.0.1:0",
+		}
+		serverTransportOptions := encodeServerTransportOptions(plugin.MethodName, plugin.Options)
+		if serverTransportOptions != "" {
+			cmd.Env = append(cmd.Env, "TOR_PT_SERVER_TRANSPORT_OPTIONS=" + serverTransportOptions)
 		}
 		log("%s environment %q", cmd.Args[0], cmd.Env)
 		stdout, err = cmd.StdoutPipe()
