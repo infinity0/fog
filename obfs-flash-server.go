@@ -19,7 +19,7 @@ import (
 
 import "git.torproject.org/pluggable-transports/goptlib.git"
 
-const connStackSize = 10
+const connStackSize = 1000
 const subprocessWaitTimeout = 30 * time.Second
 
 var logFile = os.Stderr
