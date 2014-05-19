@@ -32,7 +32,7 @@ var handlerChan = make(chan int)
 
 func usage() {
 	fmt.Printf("Usage: %s [OPTIONS]\n", os.Args[0])
-	fmt.Printf("Chains websocket-server and obfsproxy transports. websocket-server and\n")
+	fmt.Printf("Chains websocket and obfsproxy server transports. pt-websocket-server and\n")
 	fmt.Printf("obfsproxy must be in PATH.\n")
 	fmt.Printf("\n")
 	fmt.Printf("  -h, --help   show this help.\n")
