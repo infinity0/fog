@@ -415,7 +415,9 @@ def main(*args):
     if opts.f:
         file_contents = opts.f.read()
         configuration = Config.parse(file_contents)
-    pt_method_names = configuration.alias_map.keys()
+        pt_method_names = configuration.alias_map.keys()
+    else:
+        pt_method_names = ["obfs3_flashproxy"]
 
     client = ClientTransportPlugin()
     client.init(pt_method_names) # Initialize our possible methods to all the chains listed by the fog file and stored in alias map.
@@ -429,7 +431,7 @@ def main(*args):
     if configuration:
         pt_launch_pair(reactor, client, opts.callback_port, configuration, pt_method_names[0])
     else:
-        logging.warn("No configuration file specified. Defaulting to launching obfs|flashproxy pair.")
+        logging.warn("No configuration file specified. Defaulting to launching obfs3|flashproxy pair.")
         obfs3_flashproxy(reactor, client, opts.callback_port, opts.fp_remote, opts.fp_arg or [])
 
     reactor.run(installSignalHandlers=0)
