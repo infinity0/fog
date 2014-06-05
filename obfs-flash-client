@@ -246,17 +246,36 @@ def pt_require_child(client, childmethod, pt_method_name, cmethods):
         raise ValueError()
     return cmethods[childmethod]
 
-def pt_launch_pair(reactor, client, callback_port, configuration, pt_method_name):
+def pt_setup_socks_proxy(pt_name, pt_chain, success_list, dest_address, dest_port, reactor, listen_port=0):
+    """Launches a socks proxy server to link two PTs together.
+    :param str pt_name: The name of the pt to send traffic to.
+    :param list pt_chain: The list of PTs in this chain.
+    :param list success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
+        Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
+            (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
+    :param str dest_address: The address for the next PT to send its results to.
+    :param int dest_port: The port for the next PT to send to.
+    :param twisted.internet.interfaces.IReactor reactor: Reactor to attack the TCP server to.
+    :param int listen_port. The port to for the TCP server to listen on. Default is chosen by the OS."""
+
+    methodspec = [r[1] for r in success_list if r[1].name == pt_name][0] # Returns the resulting methodspec.
+    proxy_server = reactor.listenTCP(interface='127.0.0.1', port=listen_port, factory=
+                                    SOCKS4WrapperFactory(methodspec.addrport[0], methodspec.addrport[1], dest_address, dest_port))
+    return proxy_server.getHost().port
+
+def pt_launch_chain(reactor, client, callback_port, configuration, pt_method_name):
     """
-    Launches a pair of pluggable transports. Currently only supports chaining two transports together.
-    The pair is set by pt_method_names
+    Launches a chain of pluggable transports.
     :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
     :param pyptlib.client.ClientTransportPlugin client: PT client API.
     :param int callback_port: Local listen port for the first PT to connect to.
     :param Config configuration: The configuration structure for this pair.
-    :param String pt_method_name: The name of the pt chain to launch. Ex: "obfs3_flashproxy"
+    :param str pt_method_name: The name of the pt chain to launch. Ex: "obfs3_flashproxy"
     """
-    #TODO Modify pt_launch_pair to launch more than 2 transports
+
+    # Temporary hardcoded ip/port
+    dest_address = '127.0.0.1'
+    dest_port = 2400
 
     if pt_method_name in configuration.alias_map:
         pt_chain = configuration.alias_map[pt_method_name]
@@ -266,19 +285,22 @@ def pt_launch_pair(reactor, client, callback_port, configuration, pt_method_name
 
     defer_list = []
 
+    if len(pt_chain) < 2:
+        raise ValueError("PT Chain %s does not contain enough transports." % pt_chain)
+
     for pt in pt_chain:
         if pt in configuration.transport_map:
             pt_cmdline = configuration.transport_map[pt]
         else:
-            logging.error("Pluggable transport %s not found in transport_map. Check your configuration file." % str(pt))
-            raise ValueError()
+            raise ValueError("Pluggable transport %s not found in transport_map. Check your configuration file." % pt)
         _, _, defer = pt_launch_child(reactor, client, [pt], pt_method_name, pt_cmdline)
         defer_list.extend(defer)
     whenAllDone = DeferredList(defer_list, consumeErrors=False)
 
     def allDone(success_list):
         """
-        :param success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
+        Connects the pluggable transports together through SOCKS proxies.
+        :param list success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
         Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
          (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
         """
@@ -287,14 +309,22 @@ def pt_launch_pair(reactor, client, callback_port, configuration, pt_method_name
         # failure was already reported by pt_require_child, just return
         if not success: return
 
-        result1 = [r[1] for r in success_list if r[1].name == pt_chain[0]][0] # Normally obfs3 result
-        result2 = [r[1] for r in success_list if r[1].name == pt_chain[1]][0] # Normally flashproxy result
-        destination_port = result2.addrport[1] # if port was 0, read the actual port
-        # shim to wrap obfs data output to SOCKS input for flashproxy
-        reactor.listenTCP(interface='127.0.0.1', port=callback_port, factory=
-            SOCKS4WrapperFactory('127.0.0.1', destination_port, '0.0.1.0', 1))
+        #This TCP server forwards the data to the last pt, which then sends the data to the actual bridge address
+        last_pt_name = pt_chain[-1]
+        # Initialize prev_port to the first port picked by the last proxy as that's the only one we know yet.
+        prev_port = pt_setup_socks_proxy(last_pt_name, pt_chain, success_list, dest_address, dest_port, reactor)
+
+        for pt_name in reversed(pt_chain[1:-1]):
+            #Loops through the middle pts linking them together through SOCKS proxies, skipping the first and last pts.
+            prev_port = pt_setup_socks_proxy(pt_name, pt_chain, success_list, '127.0.0.1', prev_port, reactor)
+
+        # Links the first server to listen on the given callback_port and forward data from the first pt onto the next.
+        first_pt_name = pt_chain[0]
+        pt_setup_socks_proxy(first_pt_name, pt_chain, success_list, '127.0.0.1', prev_port, reactor, listen_port=callback_port)
+
         # now report success of the overall composed PT
-        client.reportMethodSuccess(pt_method_name, result1.protocol, result1.addrport)
+        first_methodspec = [r[1] for r in success_list if r[1].name == first_pt_name and r[1].name in pt_chain][0]
+        client.reportMethodSuccess(pt_method_name, first_methodspec.protocol, first_methodspec.addrport)
         client.reportMethodsEnd()
     whenAllDone.addCallback(allDone)
 
@@ -321,7 +351,7 @@ class Config():
     def parse(cls, config_string):
         """
         Reads a configuration string and returns an instance of configuration. Uses shlex to parse configuration lines.
-        :param String config_string: The string which will be parsed to populate the transport_map and alias_map hash tables.
+        :param str config_string: The string which will be parsed to populate the transport_map and alias_map hash tables.
         See the file example-fog-config for format.
         """
         # TODO Add possibility of reading a ClientTransportPlugin with multiple transport types
@@ -387,7 +417,7 @@ def obfs3_flashproxy(reactor, client, callback_port, fp_remote, fp_args=[], fp_l
     alias_map = {'obfs3_flashproxy': ['obfs3', 'flashproxy']}
 
     configuration = Config(transport_map, alias_map)
-    pt_launch_pair(reactor, client, callback_port, configuration, "obfs3_flashproxy") # Launch
+    pt_launch_chain(reactor, client, callback_port, configuration, "obfs3_flashproxy") # Launch
 
 def main(*args):
     parser = argparse.ArgumentParser()
@@ -408,7 +438,7 @@ def main(*args):
 
     opts = parser.parse_args(args)
 
-    # ensure str address is valid
+    # ensure string address is valid
     _, _, = parse_addr_spec(opts.fp_remote, defhost="0.0.0.0")
     configuration = None
 
@@ -429,7 +459,7 @@ def main(*args):
     auto_killall(1, cleanup=reactor.stop)
     #TODO Change from launching a single pair to launching multiple chains.
     if configuration:
-        pt_launch_pair(reactor, client, opts.callback_port, configuration, pt_method_names[0])
+        pt_launch_chain(reactor, client, opts.callback_port, configuration, pt_method_names[0])
     else:
         logging.warn("No configuration file specified. Defaulting to launching obfs3|flashproxy pair.")
         obfs3_flashproxy(reactor, client, opts.callback_port, opts.fp_remote, opts.fp_arg or [])
