@@ -30,6 +30,14 @@ import shlex
 
 import logging
 
+logger = None
+def pt_setup_logger():
+    global logger
+    logger = logging.getLogger('obfs-flash-logger')
+    logger.setLevel(logging.WARNING)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    logger.addHandler(ch)
 
 def pt_child_env(managed_ver, env=os.environ):
     """
@@ -172,9 +180,9 @@ class OneUseSOCKS4Wrapper(ProxyServer):
         stored_port = self.factory.listen_port.getHost().port
         d_port_closed = self.factory.listen_port.stopListening()
         d_port_closed.addCallback(
-            lambda x: logging.debug("Closed factory listener %s on port %s" % (self.factory, stored_port)))
+            lambda x: logger.debug("Closed factory listener %s on port %s" % (self.factory, stored_port)))
         d_port_closed.addErrback(
-            lambda x: logging.warn("Failed to close factory listener %s listening on port %s" % (self.factory, stored_port)))
+            lambda x: logger.warn("Failed to close factory listener %s listening on port %s" % (self.factory, stored_port)))
         d = SOCKSPoint.connect(client)
         d.chainDeferred(self.factory.d_connected)
         @d.addErrback
@@ -310,7 +318,7 @@ def pt_setup_socks_shim(pt_name, pt_chain, success_list, dest_address, dest_port
     proxy_server = reactor.listenTCP(interface='127.0.0.1', port=0, factory=factory)
     factory.setListenPort(proxy_server)
     proxy_deferreds.append(factory.whenConnected())
-    logging.debug("launched %s on port %s with dest %s:%s" % (pt_name, proxy_server.getHost().port, dest_address, dest_port))
+    logger.debug("launched %s on port %s with dest %s:%s" % (pt_name, proxy_server.getHost().port, dest_address, dest_port))
     return proxy_server
 
 def pt_launch_chain(dest_address, dest_port, pt_chain, _chain_set_up, reactor, success_list):
@@ -327,7 +335,7 @@ def pt_launch_chain(dest_address, dest_port, pt_chain, _chain_set_up, reactor, s
     """
     proxy_deferreds = []
     last_pt_name = pt_chain[-1]
-    logging.debug("launching chain %s" % pt_chain)
+    logger.debug("launching chain %s" % pt_chain)
     # Initialize prev_server to the port picked by the last proxy server as that's the only one we know yet.
     last_server = pt_setup_socks_shim(last_pt_name, pt_chain, success_list, dest_address, dest_port,
                                     reactor, proxy_deferreds)
@@ -344,12 +352,12 @@ def pt_launch_chain(dest_address, dest_port, pt_chain, _chain_set_up, reactor, s
                  (True, <twisted.protocols.portforward.ProxyClient instance at 0x10b829518>)]
         """
         if all([result[0] for result in protocol_list]):
-            logging.debug("All PT shims connected correctly")
+            logger.debug("All PT shims connected correctly")
         else:
             # At this point the SOCKS protocol is in communication mode so no need to call makeReply(91)
             # This assumes that the child pluggable transport will shut down the connection cleanly.
             failed_protocols = [x[1] for x in protocol_list if x[0] == False]
-            logging.error("Shims %s failed to connect." % failed_protocols)
+            logger.error("Shims %s failed to connect." % failed_protocols)
             raise ValueError()
 
     finished = DeferredList(proxy_deferreds)
@@ -367,7 +375,7 @@ def pt_launch_interceptor(reactor, client, configuration, pt_method_name, succes
         Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
             (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
     """
-    logging.debug("launching interceptor")
+    logger.debug("launching interceptor")
     pt_chain = configuration.alias_map[pt_method_name]
     success = all(r[0] for r in success_list if r[1].name in pt_chain)
     # failure was already reported by pt_require_child, just return
@@ -389,11 +397,11 @@ def pt_setup_transports(reactor, client, configuration, pt_method_name):
     :param Config configuration: The configuration structure for this pair.
     :param str pt_method_name: The name of the pt chain to launch. Ex: "obfs3_flashproxy"
     """
-    logging.debug("Setting up transports %s" % pt_method_name)
+    logger.debug("Setting up transports %s" % pt_method_name)
     if pt_method_name in configuration.alias_map:
         pt_chain = configuration.alias_map[pt_method_name]
     else:
-        logging.error('Pluggable Transport Combination %s not found in configuration alias map.' % pt_method_name)
+        logger.error('Pluggable Transport Combination %s not found in configuration alias map.' % pt_method_name)
         raise KeyError()
 
     defer_list = []
@@ -410,6 +418,7 @@ def pt_setup_transports(reactor, client, configuration, pt_method_name):
         defer_list.extend(defer)
     whenAllDone = DeferredList(defer_list, consumeErrors=False)
     whenAllDone.addCallback(lambda success_list: pt_launch_interceptor(reactor, client, configuration, pt_method_name, success_list))
+
 
 class Config():
     # Transport map links a pluggable transport name to the a commandline to launch it.
@@ -457,7 +466,7 @@ class Config():
                     elif config_line_type == 'Alias':
                         cls.parse_alias_line(alias_map, transport_map, delimited_tokens, line_counter)
                     else:
-                        logging.warn("Configuration file has unknown line %s: '%s'" % (line_counter, line))
+                        logger.warn("Configuration file has unknown line %s: '%s'" % (line_counter, line))
         return cls(transport_map, alias_map)
 
     @classmethod
@@ -508,6 +517,7 @@ def main(*args):
     parser.add_argument("-f", help="fog configuration file path",
         metavar='FOGFILE', type=argparse.FileType('r'))
 
+    pt_setup_logger()
     # TODO(infinity0): add an "external" mode, which would require us to run
     # obfsproxy in external mode too.
 
@@ -527,7 +537,7 @@ def main(*args):
     client = ClientTransportPlugin()
     client.init(pt_method_names) # Initialize our possible methods to all the chains listed by the fog file and stored in alias map.
     if not client.getTransports():
-        logging.error("no transports to serve. pt_method_names may be invalid.")
+        logger.error("no transports to serve. pt_method_names may be invalid.")
         return 1
 
     from twisted.internet import reactor
