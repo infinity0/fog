@@ -1,0 +1,13 @@
+#Based off of ticket #9744
+#Server transports are setup like so:
+#ServerTransportPlugin name commandline
+#For instance to launch obfs3, the server transport line should be this
+#ServerTransportPlugin obfs3 obfsproxy managed
+#
+#For chaining transports together, an alias line is used.
+#Alias chainname firsttransportname|secondtransportname
+#tor expects alias to use underscores instead of pipes. So an alias links the tor version of a plugin chain to the actual plugins. See ticket #9580
+
+ServerTransportPlugin obfs3 obfsproxy managed
+ServerTransportPlugin websocket pt-websocket-server
+Alias obfs3_websocket obfs3|websocket

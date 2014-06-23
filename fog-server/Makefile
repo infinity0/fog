@@ -1,6 +1,6 @@
 GOBUILDFLAGS =
 
-./fog-server: ./fog-server.go ./stack.go
+./fog-server: ./fog-server.go ./stack.go ./config.go
 	go build $(GOBUILDFLAGS) -o "$@" $^
 
 test:

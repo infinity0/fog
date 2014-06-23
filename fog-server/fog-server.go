@@ -39,6 +39,7 @@ func usage() {
 	fmt.Printf("  -h, --help   show this help.\n")
 	fmt.Printf("  --log FILE   log messages to FILE (default stderr).\n")
 	fmt.Printf("  --port PORT  listen on PORT (overrides Tor's requested port).\n")
+	fmt.Printf("  -f, --file FILE   Loads and runs configuration FILE.\n")
 }
 
 var logMutex sync.Mutex
@@ -172,14 +173,6 @@ func encodeServerTransportOptions(methodName string, opts pt.Args) string {
 		}
 	}
 	return strings.Join(parts, ";")
-}
-
-// Represents a server transport plugin configuration like:
-// 	ServerTransportPlugin MethodName exec Command
-type ServerTransportPlugin struct {
-	MethodName string
-	Command    []string
-	Options    pt.Args
 }
 
 func startProcesses(connectBackAddr net.Addr, plugins []ServerTransportPlugin) (bindAddr *net.TCPAddr, procs ProcList, err error) {
@@ -393,72 +386,17 @@ func startChain(methodName string, bindaddr *net.TCPAddr, plugins []ServerTransp
 	return chain, nil
 }
 
-type Configuration struct {
-	// Map from method names to command strings.
-	Transports map[string][]string
-	// Map from method names to ServerTransportOptions.
-	Options map[string]pt.Args
-	// Map from tor-friendly names like "obfs3_websocket" to systematic
-	// names like "obfs3|websocket".
-	Aliases map[string]string
-}
-
-func (conf *Configuration) MethodNames() []string {
-	result := make([]string, 0)
-	// We understand all the single transports
-	for k, _ := range conf.Transports {
-		result = append(result, k)
-	}
-	// and aliases.
-	for k, _ := range conf.Aliases {
-		result = append(result, k)
-	}
-	return result
-}
-
-// Parse a (possibly composed) method name into a slice of single method names.
-func (conf *Configuration) ParseMethodName(methodName string) []string {
-	if name, ok := conf.Aliases[methodName]; ok {
-		methodName = name
-	}
-	return strings.Split(methodName, "|")
-}
-
-func (conf *Configuration) PluginList(methodName string) ([]ServerTransportPlugin, error) {
-	names := conf.ParseMethodName(methodName)
-	stp := make([]ServerTransportPlugin, 0)
-	for _, name := range names {
-		command, ok := conf.Transports[name]
-		if !ok {
-			return nil, errors.New(fmt.Sprintf("no transport named %q", name))
-		}
-		options := conf.Options[name]
-		stp = append(stp, ServerTransportPlugin{name, command, options})
-	}
-	return stp, nil
-}
-
-// Simulate loading a configuration file.
-func getConfiguration() (conf *Configuration) {
-	conf = new(Configuration)
-	conf.Transports = make(map[string][]string)
-	conf.Aliases = make(map[string]string)
-	conf.Options = make(map[string]pt.Args)
-	conf.Transports["obfs3"] = []string{"obfsproxy", "managed"}
-	conf.Transports["websocket"] = []string{"pt-websocket-server"}
-	// conf.Options["obfs3"] = make(pt.Args)
-	// conf.Options["obfs3"]["secret"] = []string{"foo"}
-	conf.Aliases["obfs3_websocket"] = "obfs3|websocket"
-	return conf
-}
-
 func main() {
 	var logFilename string
 	var port int
+	var configFilename string
+	var conf *Configuration
 
 	flag.Usage = usage
 	flag.StringVar(&logFilename, "log", "", "log file to write to")
 	flag.IntVar(&port, "port", 0, "port to listen on if unspecified by Tor")
+	flag.StringVar(&configFilename, "file", "fogrc", "The fog file to read the configuration from.")
+	flag.StringVar(&configFilename, "f", "fogrc", "The fog file to read the configuration from.")
 	flag.Parse()
 
 	if logFilename != "" {
@@ -469,11 +407,15 @@ func main() {
 		}
 		logFile = f
 	}
+	var err error
 
+	conf, err = ReadConfigFile(configFilename)
+	if err != nil {
+		log("Error in reading configuration file: %s", err)
+		os.Exit(1)
+	}
 	log("Starting.")
 
-	var err error
-	conf := getConfiguration()
 	ptInfo, err = pt.ServerSetup(conf.MethodNames())
 	if err != nil {
 		log("Error in ServerSetup: %s", err)
