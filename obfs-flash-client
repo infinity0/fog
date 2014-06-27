@@ -312,17 +312,20 @@ def pt_launch_chain(reactor, client, callback_port, configuration, pt_method_nam
         #This TCP server forwards the data to the last pt, which then sends the data to the actual bridge address
         last_pt_name = pt_chain[-1]
         # Initialize prev_port to the first port picked by the last proxy as that's the only one we know yet.
-        prev_port = pt_setup_socks_proxy(last_pt_name, pt_chain, success_list, dest_address, dest_port, reactor)
+        listen_port = 0 if len(pt_chain) > 2 else callback_port
+        prev_port = pt_setup_socks_proxy(last_pt_name, pt_chain, success_list, dest_address, dest_port, reactor, listen_port)
 
-        for pt_name in reversed(pt_chain[1:-1]):
-            #Loops through the middle pts linking them together through SOCKS proxies, skipping the first and last pts.
-            prev_port = pt_setup_socks_proxy(pt_name, pt_chain, success_list, '127.0.0.1', prev_port, reactor)
+        if len(pt_chain) > 2:
+            for pt_name in reversed(pt_chain[2:-1]):
+                #Loops through the middle pts linking them together through SOCKS proxies, skipping the first and last pts.
+                prev_port = pt_setup_socks_proxy(pt_name, pt_chain, success_list, '127.0.0.1', prev_port, reactor)
 
-        # Links the first server to listen on the given callback_port and forward data from the first pt onto the next.
-        first_pt_name = pt_chain[0]
-        pt_setup_socks_proxy(first_pt_name, pt_chain, success_list, '127.0.0.1', prev_port, reactor, listen_port=callback_port)
+            # Links the second server to listen on the given callback_port
+            pt_name = pt_chain[1]
+            prev_port = pt_setup_socks_proxy(pt_name, pt_chain, success_list, '127.0.0.1', prev_port, reactor, listen_port=callback_port)
 
         # now report success of the overall composed PT
+        first_pt_name = pt_chain[0]
         first_methodspec = [r[1] for r in success_list if r[1].name == first_pt_name and r[1].name in pt_chain][0]
         client.reportMethodSuccess(pt_method_name, first_methodspec.protocol, first_methodspec.addrport)
         client.reportMethodsEnd()
