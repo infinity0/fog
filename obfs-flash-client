@@ -410,7 +410,7 @@ def obfs3_flashproxy(reactor, client, callback_port, fp_remote, fp_args=[], fp_l
     ob_client = os.getenv("OBFSPROXY", "obfsproxy")
     fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
 
-    fp_cmdline =  [fp_client, "--transport", '"obfs3|websocket"'] + fp_args + ['127.0.0.1:%s' % fp_local, fp_remote]
+    fp_cmdline =  [fp_client, "--transport", 'obfs3|websocket'] + fp_args + ['127.0.0.1:%s' % fp_local, fp_remote]
     obfs_cmd_line = [ob_client, "managed"]
 
     transport_map = {'obfs3': obfs_cmd_line, 'flashproxy': fp_cmdline}
