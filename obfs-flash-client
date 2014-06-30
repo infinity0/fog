@@ -23,7 +23,7 @@ from twisted.internet.endpoints import TCP4ClientEndpoint
 from twisted.protocols.basic import LineReceiver
 from twisted.protocols.portforward import ProxyServer as _ProxyServer
 from twisted.python import log
-from txsocksx.client import SOCKS4ClientEndpoint
+from txsocksx.client import SOCKS4ClientEndpoint, SOCKS5ClientEndpoint
 from fog.socks import SOCKSv4InterceptorFactory
 
 import shlex
@@ -165,18 +165,22 @@ class ProxyServer(_ProxyServer):
     def connectProxyClient(self, client):
         raise NotImplementedError()
 
-class OneUseSOCKS4Wrapper(ProxyServer):
+class OneUseSOCKSWrapper(ProxyServer):
 
     def connectProxyClient(self, client):
+        local_host, local_port = self.factory.method_spec.addrport
         TCPPoint = TCP4ClientEndpoint(
             self.reactor,
-            self.factory.local_host,
-            self.factory.local_port)
-        SOCKSPoint = SOCKS4ClientEndpoint(
-            self.factory.remote_host,
-            self.factory.remote_port,
-            TCPPoint)
-        # Store port for debugging messages before stopListening is called. listen_port will not have a port after stopListening is called.
+            local_host,
+            local_port)
+        # Next PT may need either SOCKS4 or SOCKS5 so check its protocol and get the required class
+        socks_endpoint_class = self.getSocksEndpointClass()
+        SOCKSPoint = socks_endpoint_class(
+                    self.factory.remote_host,
+                    self.factory.remote_port,
+                    TCPPoint)
+        # Store port for debugging messages before stopListening is called.
+        # listen_port will not have a port after stopListening is called.
         stored_port = self.factory.listen_port.getHost().port
         d_port_closed = self.factory.listen_port.stopListening()
         d_port_closed.addCallback(
@@ -189,23 +193,35 @@ class OneUseSOCKS4Wrapper(ProxyServer):
         def _gotError(error):
             log.err(error, "error connecting to SOCKS server")
 
-class OneUseSOCKS4Factory(Factory):
-    protocol = OneUseSOCKS4Wrapper
+    def getSocksEndpointClass(self):
+        """
+        Checks self.factory.method_spec.protocol and returns the appropriate socks endpoint class.
+        """
+        socks_endpoint_class = None
+        if self.factory.method_spec.protocol == 'socks4':
+            socks_endpoint_class = SOCKS4ClientEndpoint
+        elif self.factory.method_spec.protocol == 'socks5':
+            socks_endpoint_class = SOCKS5ClientEndpoint
+        else:
+            raise ValueError("Pluggable transport requires unknown protocol %s. Supported protocols are %s" %
+                            (self.factory.method_spec.protocol, ('socks4', 'socks5')))
+        return socks_endpoint_class
 
-    def __init__(self, local_host, local_port, remote_host, remote_port):
+class OneUseSOCKSFactory(Factory):
+    protocol = OneUseSOCKSWrapper
+    def __init__(self, method_spec, remote_host, remote_port):
         self._connected_once = False
-        self.local_host = local_host
-        self.local_port = local_port
+        self.method_spec = method_spec
         self.remote_host = remote_host
         self.remote_port = remote_port
         self.d_connected = Deferred()
         self.listen_port = None
 
     def __str__(self):
-        return "OneUseSOCKS4Factory connecting %s:%s to %s:%s" % (self.local_host, self.local_port, self.remote_host, self.remote_port)
+        return "OneUseSOCKSFactory connecting %s to %s:%s" % (self.method_spec, self.remote_host, self.remote_port)
 
     def __repr__(self):
-        return "OneUseSOCKS4Factory(%s, %s, %s, %s)" % (self.local_host, self.local_port, self.remote_host, self.remote_port)
+        return "OneUseSOCKSFactory(%s, %s, %s)" % (self.method_spec, self.remote_host, self.remote_port)
 
     def setListenPort(self, listen_port):
         """
@@ -313,7 +329,7 @@ def pt_setup_socks_shim(pt_name, pt_chain, success_list, dest_address, dest_port
     :returns twisted.internet.interfaces.IListeningPort: An IListeningPort used for shutting down a factory after a connection is made.
     """
     methodspec = [r[1] for r in success_list if r[1].name == pt_name][0] # Returns the resulting methodspec.
-    factory = OneUseSOCKS4Factory(methodspec.addrport[0], methodspec.addrport[1], dest_address, dest_port)
+    factory = OneUseSOCKSFactory(methodspec, dest_address, dest_port)
     # TODO switch to using endpoints instead of listenTCP
     proxy_server = reactor.listenTCP(interface='127.0.0.1', port=0, factory=factory)
     factory.setListenPort(proxy_server)
