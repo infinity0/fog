@@ -30,6 +30,8 @@ import shlex
 
 import logging
 
+DEFAULT_CONFIG_FILE_NAME = 'fogrc'
+
 logger = None
 def pt_setup_logger():
     global logger
@@ -504,52 +506,20 @@ class Config():
                 raise KeyError('Transport map is missing pluggable transport %s needed for chain %s. Check your configuration file for a ClientTransportPlugin line can launch %s' % (pt_name, alias_name, pt_name))
         alias_map[alias_name] = alias_path
 
-def obfs3_flashproxy(fp_remote, fp_args=[], fp_local=0):
-    """
-    Set up the obfs3_flashproxy combined PT.
-    :param str fp_remote: Listen address for remote flashproxy connections.
-    :param str fp_args: The arguments to pass to the flashproxy connections.
-    :param int fp_local: Local listen port for local flashproxy connections.
-    """
-    ob_client = os.getenv("OBFSPROXY", "obfsproxy")
-    fp_client = os.getenv("FLASHPROXY_CLIENT", "flashproxy-client")
-
-    fp_cmdline =  [fp_client, "--transport", 'obfs3|websocket'] + fp_args + ['127.0.0.1:%s' % fp_local, fp_remote]
-    obfs_cmd_line = [ob_client, "managed"]
-
-    transport_map = {'obfs3': obfs_cmd_line, 'flashproxy': fp_cmdline}
-    alias_map = {'obfs3_flashproxy': ['obfs3', 'flashproxy']}
-
-    configuration = Config(transport_map, alias_map)
-    return configuration
-
 def main(*args):
     parser = argparse.ArgumentParser()
-    parser.add_argument("fp_remote", help="remote connections listen address "
-        "for flashproxy, default %(default)s",
-        metavar='REMOTE:PORT', nargs='?', default=":9000")
-    parser.add_argument("--fp-arg", help="arguments for flashproxy-client",
-        metavar='ARG', action='append')
     parser.add_argument("-f", help="fog configuration file path",
-        metavar='FOGFILE', type=argparse.FileType('r'))
+        metavar='FOGFILE', type=argparse.FileType('r'), default=DEFAULT_CONFIG_FILE_NAME)
 
     pt_setup_logger()
     # TODO(infinity0): add an "external" mode, which would require us to run
     # obfsproxy in external mode too.
 
     opts = parser.parse_args(args)
-
-    # ensure string address is valid
-    _, _, = parse_addr_spec(opts.fp_remote, defhost="0.0.0.0")
     configuration = None
-
-    if opts.f:
-        file_contents = opts.f.read()
-        configuration = Config.parse(file_contents)
-        pt_method_names = configuration.alias_map.keys()
-    else:
-        pt_method_names = ["obfs3_flashproxy"]
-        configuration = obfs3_flashproxy(opts.fp_remote, opts.fp_arg or [])
+    file_contents = opts.f.read()
+    configuration = Config.parse(file_contents)
+    pt_method_names = configuration.alias_map.keys()
     client = ClientTransportPlugin()
     client.init(pt_method_names) # Initialize our possible methods to all the chains listed by the fog file and stored in alias map.
     if not client.getTransports():
