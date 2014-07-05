@@ -1,1 +1,2 @@
-/mkii/obfs-flash-server
+/fog-server/fog-server
+*.pyc

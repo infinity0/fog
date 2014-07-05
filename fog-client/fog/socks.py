@@ -2,7 +2,7 @@ from twisted.protocols import socks
 from twisted.internet.protocol import Factory
 import logging
 
-logger = logging.getLogger('obfs-flash-logger')
+logger = logging.getLogger('fog-logger')
 
 class SOCKSv4InterceptorProtocol(socks.SOCKSv4):
     """

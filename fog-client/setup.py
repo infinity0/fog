@@ -12,8 +12,8 @@ import py2exe
 #  - this is due to a bug (or misleading documentation) in python's imp.find_module()
 
 setup(
-    console=["obfs-flash-client"],
-    zipfile="py2exe-obfs-flash-client.zip",
+    console=["fog-client"],
+    zipfile="py2exe-fog-client.zip",
     options={
         "py2exe": {
             "includes": ["pyptlib", "twisted", "txsocksx"],

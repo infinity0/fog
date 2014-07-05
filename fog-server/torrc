@@ -1,0 +1,5 @@
+ORPort 9999
+ExtORPort 5555
+BridgeRelay 1
+SocksPort 0
+ServerTransportPlugin obfs3_websocket exec ./bin/fog-server

@@ -30,12 +30,12 @@ import shlex
 
 import logging
 
-DEFAULT_CONFIG_FILE_NAME = 'fogrc'
+DEFAULT_CONFIG_FILE_NAME = os.path.dirname(os.path.realpath(__file__)) + '/fogrc'
 
 logger = None
 def pt_setup_logger():
     global logger
-    logger = logging.getLogger('obfs-flash-logger')
+    logger = logging.getLogger('fog-logger')
     logger.setLevel(logging.WARNING)
     ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
