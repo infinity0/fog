@@ -214,11 +214,11 @@ class OneUseSOCKSWrapper(ProxyServer):
 
 class OneUseSOCKSFactory(Factory):
     protocol = OneUseSOCKSWrapper
-    def __init__(self, method_spec, remote_host, remote_port):
+    def __init__(self, method_spec, dest_addr_port):
         self._connected_once = False
         self.method_spec = method_spec
-        self.remote_host = remote_host
-        self.remote_port = remote_port
+        self.remote_host = dest_addr_port[0]
+        self.remote_port = dest_addr_port[1]
         self.d_connected = Deferred()
         self.listen_port = None
 
@@ -374,7 +374,7 @@ def pt_setup_chains(reactor, client, configuration, chain_names, pt_defer_map):
         all_chains_defer_list.append(chain_deferred_list)
     return DeferredList(all_chains_defer_list)
 
-def pt_setup_socks_shim(pt_name, pt_chain, success_list, dest_address, dest_port, reactor, proxy_deferreds):
+def pt_setup_socks_shim(pt_name, pt_chain, success_list, dest_addr_port, reactor, proxy_deferreds):
     """
     Launches a socks proxy server to link two PTs together.
     :param str pt_name: The name of the pt to send traffic to.
@@ -382,8 +382,7 @@ def pt_setup_socks_shim(pt_name, pt_chain, success_list, dest_address, dest_port
     :param list success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
         Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
             (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
-    :param str dest_address: The address for the next PT to send its results to.
-    :param int dest_port: The port for the next PT to send to.
+    :param tuple dest_addr_port: The bridge address:port pair for the next PT to send its results to.
     :param twisted.internet.interfaces.IReactor reactor: Reactor to attack the TCP server to.
 
     :param list proxy_deferreds: This list has each factorys' deferred appended to it.
@@ -391,19 +390,18 @@ def pt_setup_socks_shim(pt_name, pt_chain, success_list, dest_address, dest_port
     :returns twisted.internet.interfaces.IListeningPort: An IListeningPort used for shutting down a factory after a connection is made.
     """
     methodspec = [r[1] for r in success_list if r[1].name == pt_name][0] # Returns the resulting methodspec.
-    factory = OneUseSOCKSFactory(methodspec, dest_address, dest_port)
+    factory = OneUseSOCKSFactory(methodspec, dest_addr_port)
     # TODO switch to using endpoints instead of listenTCP
     proxy_server = reactor.listenTCP(interface='127.0.0.1', port=0, factory=factory)
     factory.setListenPort(proxy_server)
     proxy_deferreds.append(factory.whenConnected())
-    logger.debug("launched %s on port %s with dest %s:%s" % (pt_name, proxy_server.getHost().port, dest_address, dest_port))
+    logger.debug("launched %s on port %s with dest %s" % (pt_name, proxy_server.getHost().port, dest_addr_port))
     return proxy_server
 
-def pt_launch_chain(dest_address, dest_port, pt_chain, _chain_set_up, reactor, success_list):
+def pt_launch_chain(dest_addr_port, pt_chain, _chain_set_up, reactor, success_list):
     """
     Launches a chain of pluggable transports by connecting each pt with SOCKS proxies.
-    :param str dest_address: The bridge address to connect to.
-    :param int dest_port: The bridge port to connect to.
+    :param tuple dest_addr_port: The bridge address:port pair to connect to.
     :param list pt_chain: The list of pt names to launch.
     :param function _chain_set_up: The function to call when the shims have been set up.
     :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
@@ -415,12 +413,12 @@ def pt_launch_chain(dest_address, dest_port, pt_chain, _chain_set_up, reactor, s
     last_pt_name = pt_chain[-1]
     logger.debug("launching chain %s" % pt_chain)
     # Initialize prev_server to the port picked by the last proxy server as that's the only one we know yet.
-    last_server = pt_setup_socks_shim(last_pt_name, pt_chain, success_list, dest_address, dest_port,
+    last_server = pt_setup_socks_shim(last_pt_name, pt_chain, success_list, dest_addr_port,
                                     reactor, proxy_deferreds)
     prev_server = last_server
     for pt_name in reversed(pt_chain[:-1]):
         # Loops through the pts linking them together through SOCKS proxies, skipping the last pt.
-        prev_server = pt_setup_socks_shim(pt_name, pt_chain, success_list, '127.0.0.1', prev_server.getHost().port,
+        prev_server = pt_setup_socks_shim(pt_name, pt_chain, success_list, ('127.0.0.1', prev_server.getHost().port),
                                         reactor, proxy_deferreds)
     def check_chain_all_connected(protocol_list):
         """
@@ -440,7 +438,7 @@ def pt_launch_chain(dest_address, dest_port, pt_chain, _chain_set_up, reactor, s
 
     finished = DeferredList(proxy_deferreds)
     finished.addCallback(check_chain_all_connected)
-    _chain_set_up(prev_server.getHost().host, prev_server.getHost().port)
+    _chain_set_up((prev_server.getHost().host, prev_server.getHost().port))
 
 def pt_launch_interceptor(reactor, client, configuration, pt_method_name, success_list):
     """
@@ -459,14 +457,14 @@ def pt_launch_interceptor(reactor, client, configuration, pt_method_name, succes
     # failure was already reported by pt_require_child, just return
     if not success: return
     socks_interceptor = SOCKSv4InterceptorFactory(pt_method_name,
-                        lambda dest_address, dest_port, pt_method_name, chain_finished:
-                            pt_launch_chain(dest_address, dest_port, pt_chain, chain_finished, reactor, success_list))
+                        lambda dest_addr_port, pt_method_name, chain_finished:
+                            pt_launch_chain(dest_addr_port, pt_chain, chain_finished, reactor, success_list))
     # TODO switch to using endpoints instead of listenTCP
     try:
         interceptor = reactor.listenTCP(interface='127.0.0.1', port=0, factory=socks_interceptor)
         interceptor_port = interceptor.getHost().port
     except CannotListenError:
-        client.reportMethodError(pt_method_name, " failed to launch SOCKS interceptor. The interceptor listenTCP failed.")
+        client.reportMethodError(pt_method_name, "failed to launch SOCKS interceptor. The interceptor listenTCP failed.")
         return
     client.reportMethodSuccess(pt_method_name, "socks4", ("127.0.0.1", interceptor_port))
 
@@ -560,7 +558,6 @@ def main(*args):
     pt_method_names = pt_get_unique_transport_list(client.getTransports(), configuration)
     from twisted.internet import reactor
     auto_killall(1, cleanup=reactor.stop)
-    #TODO Change from launching a single pair to launching multiple chains.
     pt_setup_transports(reactor, client, configuration, pt_method_names, client.getTransports())
     reactor.run(installSignalHandlers=0)
     return 0

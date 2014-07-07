@@ -28,12 +28,12 @@ class SOCKSv4InterceptorProtocol(socks.SOCKSv4):
             if not self.authorize(code, server, port, user):
                 self.makeReply(91)
                 return
-            def _chain_set_up(remote_address, remote_port):
-                logger.debug("chain finished, connecting to %s:%s" % (remote_address, remote_port))
+            def _chain_set_up(remote_addr_port):
+                logger.debug("chain finished, connecting %s" % (remote_addr_port,))
                 # Connect to our remote address instead of the requested one
-                d = self.connectClass(remote_address, remote_port, socks.SOCKSv4Outgoing, self)
+                d = self.connectClass(remote_addr_port[0], remote_addr_port[1], socks.SOCKSv4Outgoing, self)
                 d.addErrback(lambda result, self = self: self.makeReply(91))
-            self.factory._new_conn_callback(server, port, self._pt_method_name, _chain_set_up)
+            self.factory._new_conn_callback((server, port), self._pt_method_name, _chain_set_up)
             assert self.buf == "", "hmm, still stuff in buffer... %s" % repr(self.buf)
         else:
             super(SOCKSv4InterceptorProtocol, self)._dataReceived2(server, user, version, code, port)
