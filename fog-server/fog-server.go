@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"strings"
 	"sync"
 	"syscall"
@@ -199,7 +200,7 @@ func startProcesses(connectBackAddr net.Addr, plugins []ServerTransportPlugin) (
 		cmd := exec.Command(plugin.Command[0], plugin.Command[1:]...)
 		cmd.Env = []string{
 			"TOR_PT_MANAGED_TRANSPORT_VER=1",
-			"TOR_PT_STATE_LOCATION=" + os.Getenv("TOR_PT_STATE_LOCATION"),
+			"TOR_PT_STATE_LOCATION=" + path.Join(os.Getenv("TOR_PT_STATE_LOCATION"), "fog"),
 			"TOR_PT_EXTENDED_SERVER_PORT=",
 			"TOR_PT_ORPORT=" + bindAddr.String(),
 			"TOR_PT_SERVER_TRANSPORTS=" + plugin.MethodName,

@@ -49,6 +49,9 @@ def pt_child_env(managed_ver, env=os.environ):
     exempt = ['TOR_PT_STATE_LOCATION']
     cur_env = [(k, v) for k, v in env.iteritems()
                       if not k.startswith('TOR_PT_') or k in exempt]
+    if 'TOR_PT_STATE_LOCATION' in env:
+        prev_pt_state_location = env['TOR_PT_STATE_LOCATION']
+        cur_env.append(('TOR_PT_STATE_LOCATION', os.path.join(prev_pt_state_location, 'fog')))
     cur_env.append(('TOR_PT_MANAGED_TRANSPORT_VER', ','.join(managed_ver)))
     return cur_env
 
