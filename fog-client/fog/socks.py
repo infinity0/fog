@@ -29,7 +29,7 @@ class SOCKSv4InterceptorProtocol(socks.SOCKSv4):
                 self.makeReply(91)
                 return
             def _chain_set_up(remote_address, remote_port):
-                logger.debug("chain finished, connecting %s:%s" % (remote_address, remote_port))
+                logger.debug("chain finished, connecting to %s:%s" % (remote_address, remote_port))
                 # Connect to our remote address instead of the requested one
                 d = self.connectClass(remote_address, remote_port, socks.SOCKSv4Outgoing, self)
                 d.addErrback(lambda result, self = self: self.makeReply(91))
