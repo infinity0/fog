@@ -44,11 +44,10 @@ def pt_setup_logger():
 def pt_child_env(managed_ver, env=os.environ):
     """
     Prepare the environment for a child PT process, by clearing all TOR_PT_*
-    envvars except TOR_PT_STATE_LOCATION and TOR_PT_MANAGED_TRANSPORT_VER.
+    envvars and TOR_PT_MANAGED_TRANSPORT_VER.
     """
-    exempt = ['TOR_PT_STATE_LOCATION']
     cur_env = [(k, v) for k, v in env.iteritems()
-                      if not k.startswith('TOR_PT_') or k in exempt]
+                      if not k.startswith('TOR_PT_')]
     if 'TOR_PT_STATE_LOCATION' in env:
         prev_pt_state_location = env['TOR_PT_STATE_LOCATION']
         cur_env.append(('TOR_PT_STATE_LOCATION', os.path.join(prev_pt_state_location, 'fog')))
