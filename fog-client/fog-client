@@ -292,181 +292,186 @@ if sys.platform == "win32":
 
             self.proto.makeConnection(self)
 
-def pt_launch_child(reactor, client, methodnames, chain_names, cmdline):
-    """Launch a child PT and ensure it has the right transport methods."""
-    cur_env = pt_child_env(ManagedTransportProtocolV1.protocol_version)
-    environment = dict(cur_env + {
-            "TOR_PT_CLIENT_TRANSPORTS": ",".join(methodnames),
-        }.items())
-    sub_proc = Popen(cmdline,
-        stdout = PIPE,
-        env = environment,
-        )
-    sub_protocol = ManagedTransportProtocolV1()
-    # we ought to pass reactor=reactor in below, but this breaks Twisted 12
-    StandardIO(sub_protocol, stdin=sub_proc.stdout.fileno())
-    methoddefers = [sub_protocol.whenCMethodsDone().addCallback(
-                        partial(pt_require_child, client, name, chain_names))
-                    for name in methodnames]
-    return sub_proc, sub_protocol, methoddefers
+class FogClient():
+    """
+    Main pluggable transports combiner object. Provides functions for setting up a chain of pluggable transports
+    """
 
-def pt_require_child(client, childmethod, chain_names, cmethods):
-    """Callback for checking a child PT has the right transport methods."""
-    if childmethod not in cmethods:
-        for chain_name in chain_names:
-            client.reportMethodError(chain_name, "failed to start required child transport: %s" % childmethod)
-        raise ValueError()
-    return cmethods[childmethod]
-
-def pt_get_unique_transport_list(aliases, config):
-    """
-    Returns all the pts needed by the chains without duplicates
-    :param aliases list: The list of alias names requested by tor and intersected with the transports fog can serve
-    :param Config config: The configuration object
-    """
-    uniq_transports = set()
-    for alias in aliases:
-        for pt_name in config.alias_map[alias]:
-            uniq_transports.add(pt_name)
-    return list(uniq_transports)
-
-def pt_setup_transports(reactor, client, configuration, pt_names, chain_names):
-    """
-    Sets up the pluggable transports needed by the chains
-    :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
-    :param pyptlib.client.ClientTransportPlugin client: PT client API.
-    :param Config configuration: The configuration object.
-    :param list pt_names: The list of pt names to setup.
-    :param list chain_names: The list of chain names to launch.
-    """
-    pt_defer_map = {}
-    for pt_name in pt_names:
-        if pt_name not in configuration.transport_map:
-            raise ValueError("Pluggable transport %s not found in transport_map. Check your configuration file." % pt_name)
-        pt_cmdline = configuration.transport_map[pt_name]
-        # TODO make this more than a one item list when fixing multiple transports launched by one ClientTransportPlugin line.
-        multi_pts = [pt_name]
-        # Find all the chains where this pt is used.
-        pt_chains = [chain_name for chain_name in chain_names if pt_name in configuration.alias_map[chain_name]]
-        _, _, defers = pt_launch_child(reactor, client, multi_pts, pt_chains, pt_cmdline)
-        for pt, defer in zip(multi_pts, defers):
-            pt_defer_map[pt] = defer
-    chains_finished_dlist = pt_setup_chains(reactor, client, configuration, chain_names, pt_defer_map)
-    chains_finished_dlist.addCallback(lambda x: client.reportMethodsEnd())
-
-def pt_setup_chains(reactor, client, configuration, chain_names, pt_defer_map):
-    """
-    Sets up each chain of pluggable transports
-    :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
-    :param pyptlib.client.ClientTransportPlugin client: PT client API.
-    :param Config configuration: The configuration object.
-    :param list chain_names: The list of chain names to setup.
-    :param dict pt_defer_map: A map between each pt and the defer that will callback when the pt is successfully launched.
-    """
-    all_chains_defer_list = []
-    for chain_name in chain_names:
-        chain = configuration.alias_map[chain_name]
-        if len(chain) < 2:
-            raise ValueError("PT Chain %s does not contain enough transports." % chain)
-        chain_deferred_list = DeferredList([pt_defer_map[pt] for pt in set(chain)])
-        partial_funct = partial(pt_launch_interceptor, reactor, client, configuration, chain_name)
-        chain_deferred_list.addCallback(partial_funct)
-        all_chains_defer_list.append(chain_deferred_list)
-    return DeferredList(all_chains_defer_list)
-
-def pt_setup_socks_shim(pt_name, pt_chain, success_list, dest_addr_port, reactor, proxy_deferreds):
-    """
-    Launches a socks proxy server to link two PTs together.
-    :param str pt_name: The name of the pt to send traffic to.
-    :param list pt_chain: The list of PTs in this chain.
-    :param list success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
-        Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
-            (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
-    :param tuple dest_addr_port: The bridge address:port pair for the next PT to send its results to.
-    :param twisted.internet.interfaces.IReactor reactor: Reactor to attack the TCP server to.
-
-    :param list proxy_deferreds: This list has each factorys' deferred appended to it.
-
-    :returns twisted.internet.interfaces.IListeningPort: An IListeningPort used for shutting down a factory after a connection is made.
-    """
-    methodspec = [r[1] for r in success_list if r[1].name == pt_name][0] # Returns the resulting methodspec.
-    factory = OneUseSOCKSFactory(methodspec, dest_addr_port)
-    # TODO switch to using endpoints instead of listenTCP
-    proxy_server = reactor.listenTCP(interface='127.0.0.1', port=0, factory=factory)
-    factory.setListenPort(proxy_server)
-    proxy_deferreds.append(factory.whenConnected())
-    logger.debug("launched %s on port %s with dest %s" % (pt_name, proxy_server.getHost().port, dest_addr_port))
-    return proxy_server
-
-def pt_launch_chain(dest_addr_port, pt_chain, _chain_set_up, reactor, success_list):
-    """
-    Launches a chain of pluggable transports by connecting each pt with SOCKS proxies.
-    :param tuple dest_addr_port: The bridge address:port pair to connect to.
-    :param list pt_chain: The list of pt names to launch.
-    :param function _chain_set_up: The function to call when the shims have been set up.
-    :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
-    :param list success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
-        Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
-            (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
-    """
-    proxy_deferreds = []
-    last_pt_name = pt_chain[-1]
-    logger.debug("launching chain %s" % pt_chain)
-    # Initialize prev_server to the port picked by the last proxy server as that's the only one we know yet.
-    last_server = pt_setup_socks_shim(last_pt_name, pt_chain, success_list, dest_addr_port,
-                                    reactor, proxy_deferreds)
-    prev_server = last_server
-    for pt_name in reversed(pt_chain[:-1]):
-        # Loops through the pts linking them together through SOCKS proxies, skipping the last pt.
-        prev_server = pt_setup_socks_shim(pt_name, pt_chain, success_list, ('127.0.0.1', prev_server.getHost().port),
-                                        reactor, proxy_deferreds)
-    def check_chain_all_connected(protocol_list):
+    def __init__(self, reactor, client, configuration):
         """
-        Checks all the shims launched to see if they successfully connected.
-        :param list protocol_list: A list of tuples containing status boolean, twisted.protocols.portforward.ProxyClient pairs.
-            Ex: [(True, <twisted.protocols.portforward.ProxyClient instance at 0x10b825518>),
-                 (True, <twisted.protocols.portforward.ProxyClient instance at 0x10b829518>)]
+        :param twisted.internet.interfaces.IReactor reactor: Twisted reactor to launch pt services on.
+        :param pyptlib.client.ClientTransportPlugin client: PT client API.
+        :param Config configuration: The configuration object.
         """
-        if all([result[0] for result in protocol_list]):
-            logger.debug("All PT shims connected correctly")
-        else:
-            # At this point the SOCKS protocol is in communication mode so no need to call makeReply(91)
-            # This assumes that the child pluggable transport will shut down the connection cleanly.
-            failed_protocols = [x[1] for x in protocol_list if x[0] == False]
-            logger.error("Shims %s failed to connect." % failed_protocols)
+        self.reactor = reactor
+        self.client = client
+        self.configuration = configuration
+        self.pt_method_names = self.pt_get_unique_transport_list()
+
+    def __str__(self):
+        return "Fog_Client Object with chains %s" % (self.configuration.alias_map.keys(),)
+
+    def pt_launch_child(self, methodnames, chain_names, cmdline):
+        """Launch a child PT and ensure it has the right transport methods."""
+        cur_env = pt_child_env(ManagedTransportProtocolV1.protocol_version)
+        environment = dict(cur_env + {
+                "TOR_PT_CLIENT_TRANSPORTS": ",".join(methodnames),
+            }.items())
+        sub_proc = Popen(cmdline,
+            stdout = PIPE,
+            env = environment,
+            )
+        sub_protocol = ManagedTransportProtocolV1()
+        # we ought to pass reactor=reactor in below, but this breaks Twisted 12
+        StandardIO(sub_protocol, stdin=sub_proc.stdout.fileno())
+        methoddefers = [sub_protocol.whenCMethodsDone().addCallback(
+                            partial(self.pt_require_child, name, chain_names))
+                        for name in methodnames]
+        return sub_proc, sub_protocol, methoddefers
+
+    def pt_require_child(self, childmethod, chain_names, cmethods):
+        """Callback for checking a child PT has the right transport methods."""
+        if childmethod not in cmethods:
+            for chain_name in chain_names:
+                self.client.reportMethodError(chain_name, "failed to start required child transport: %s" % childmethod)
             raise ValueError()
+        return cmethods[childmethod]
 
-    finished = DeferredList(proxy_deferreds)
-    finished.addCallback(check_chain_all_connected)
-    _chain_set_up((prev_server.getHost().host, prev_server.getHost().port))
+    def pt_get_unique_transport_list(self):
+        """
+        Returns all the pts needed by the chains without duplicates
+        :param aliases list: The list of alias names requested by tor and intersected with the transports fog can serve
+        """
+        uniq_transports = set()
+        for transport in self.client.getTransports():
+            for pt_name in self.configuration.alias_map[transport]:
+                uniq_transports.add(pt_name)
+        return list(uniq_transports)
 
-def pt_launch_interceptor(reactor, client, configuration, pt_method_name, success_list):
-    """
-    Launches a SOCKS interceptor.
-    :param twisted.internet.interfaces.IReactor reactor: Reactor to install this PT to.
-    :param pyptlib.client.ClientTransportPlugin client: PT client API.
-    :param Config configuration: The configuration structure for this pair.
-    :param str pt_method_name: The name of the pt chain to launch. Ex: "obfs3_flashproxy"
-    :param list success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
-        Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
-            (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
-    """
-    logger.debug("launching interceptor for %s" % pt_method_name)
-    pt_chain = configuration.alias_map[pt_method_name]
-    success = all(r[0] for r in success_list if r[1].name in pt_chain)
-    # failure was already reported by pt_require_child, just return
-    if not success: return
-    socks_interceptor = SOCKSv4InterceptorFactory(pt_method_name,
-                        lambda dest_addr_port, pt_method_name, chain_finished:
-                            pt_launch_chain(dest_addr_port, pt_chain, chain_finished, reactor, success_list))
-    # TODO switch to using endpoints instead of listenTCP
-    try:
-        interceptor = reactor.listenTCP(interface='127.0.0.1', port=0, factory=socks_interceptor)
-        interceptor_port = interceptor.getHost().port
-    except CannotListenError:
-        client.reportMethodError(pt_method_name, "failed to launch SOCKS interceptor. The interceptor listenTCP failed.")
-        return
-    client.reportMethodSuccess(pt_method_name, "socks4", ("127.0.0.1", interceptor_port))
+    def pt_setup_transports(self):
+        """
+        Sets up the pluggable transports needed by the chains
+        """
+        chain_names = self.client.getTransports()
+        pt_defer_map = {}
+        for pt_name in self.pt_method_names:
+            if pt_name not in self.configuration.transport_map:
+                raise ValueError("Pluggable transport %s not found in transport_map. Check your configuration file." % pt_name)
+            pt_cmdline = self.configuration.transport_map[pt_name]
+            # TODO make this more than a one item list when fixing multiple transports launched by one ClientTransportPlugin line.
+            multi_pts = [pt_name]
+            # Find all the chains where this pt is used.
+            pt_chains = [chain_name for chain_name in chain_names if pt_name in self.configuration.alias_map[chain_name]]
+            _, _, defers = self.pt_launch_child(multi_pts, pt_chains, pt_cmdline)
+            for pt, defer in zip(multi_pts, defers):
+                pt_defer_map[pt] = defer
+        chains_finished_dlist = self.pt_setup_chains(pt_defer_map)
+        chains_finished_dlist.addCallback(lambda x: self.client.reportMethodsEnd())
+
+    def pt_setup_chains(self, pt_defer_map):
+        """
+        Sets up each chain of pluggable transports
+        :param dict pt_defer_map: A map between each pt and the defer that will callback when the pt is successfully launched.
+        """
+        all_chains_defer_list = []
+        for chain_name in self.client.getTransports():
+            chain = self.configuration.alias_map[chain_name]
+            if len(chain) < 2:
+                raise ValueError("PT Chain %s does not contain enough transports." % chain)
+            chain_deferred_list = DeferredList([pt_defer_map[pt] for pt in set(chain)])
+            partial_funct = partial(self.pt_launch_interceptor, chain_name)
+            chain_deferred_list.addCallback(partial_funct)
+            all_chains_defer_list.append(chain_deferred_list)
+        return DeferredList(all_chains_defer_list)
+
+    def pt_setup_socks_shim(self, pt_name, pt_chain, success_list, dest_addr_port, proxy_deferreds):
+        """
+        Launches a socks proxy server to link two PTs together.
+        :param str pt_name: The name of the pt to send traffic to.
+        :param list pt_chain: The list of PTs in this chain.
+        :param list success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
+            Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
+                (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
+        :param tuple dest_addr_port: The bridge address:port pair for the next PT to send its results to.
+
+        :param list proxy_deferreds: This list has each factorys' deferred appended to it.
+
+        :returns twisted.internet.interfaces.IListeningPort: An IListeningPort used for shutting down a factory after a connection is made.
+        """
+        methodspec = [r[1] for r in success_list if r[1].name == pt_name][0] # Returns the resulting methodspec.
+        factory = OneUseSOCKSFactory(methodspec, dest_addr_port)
+        # TODO switch to using endpoints instead of listenTCP
+        proxy_server = self.reactor.listenTCP(interface='127.0.0.1', port=0, factory=factory)
+        factory.setListenPort(proxy_server)
+        proxy_deferreds.append(factory.whenConnected())
+        logger.debug("launched %s on port %s with dest %s" % (pt_name, proxy_server.getHost().port, dest_addr_port))
+        return proxy_server
+
+    def pt_launch_chain(self, dest_addr_port, pt_chain, _chain_set_up, success_list):
+        """
+        Launches a chain of pluggable transports by connecting each pt with SOCKS proxies.
+        :param tuple dest_addr_port: The bridge address:port pair to connect to.
+        :param list pt_chain: The list of pt names to launch.
+        :param function _chain_set_up: The function to call when the shims have been set up.
+        :param list success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
+            Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
+                (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
+        """
+        proxy_deferreds = []
+        last_pt_name = pt_chain[-1]
+        logger.debug("launching chain %s" % pt_chain)
+        # Initialize prev_server to the port picked by the last proxy server as that's the only one we know yet.
+        last_server = self.pt_setup_socks_shim(last_pt_name, pt_chain, success_list, dest_addr_port,
+                                        proxy_deferreds)
+        prev_server = last_server
+        for pt_name in reversed(pt_chain[:-1]):
+            # Loops through the pts linking them together through SOCKS proxies, skipping the last pt.
+            prev_server = self.pt_setup_socks_shim(pt_name, pt_chain, success_list, ('127.0.0.1', prev_server.getHost().port),
+                                            proxy_deferreds)
+        def check_chain_all_connected(protocol_list):
+            """
+            Checks all the shims launched to see if they successfully connected.
+            :param list protocol_list: A list of tuples containing status boolean, twisted.protocols.portforward.ProxyClient pairs.
+                Ex: [(True, <twisted.protocols.portforward.ProxyClient instance at 0x10b825518>),
+                     (True, <twisted.protocols.portforward.ProxyClient instance at 0x10b829518>)]
+            """
+            if all([result[0] for result in protocol_list]):
+                logger.debug("All PT shims connected correctly")
+            else:
+                # At this point the SOCKS protocol is in communication mode so no need to call makeReply(91)
+                # This assumes that the child pluggable transport will shut down the connection cleanly.
+                failed_protocols = [x[1] for x in protocol_list if x[0] == False]
+                logger.error("Shims %s failed to connect." % failed_protocols)
+                raise ValueError()
+
+        finished = DeferredList(proxy_deferreds)
+        finished.addCallback(check_chain_all_connected)
+        _chain_set_up((prev_server.getHost().host, prev_server.getHost().port))
+
+    def pt_launch_interceptor(self, pt_method_name, success_list):
+        """
+        Launches a SOCKS interceptor.
+        :param str pt_method_name: The name of the pt chain to launch. Ex: "obfs3_flashproxy"
+        :param list success_list: A list of tuples containing a launch status boolean, MethodSpec pairs.
+            Ex: [(True, MethodSpec(name='dummy', protocol='socks4', addrport=('127.0.0.1', 58982), args=[], opts=[])),
+                (True, MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 58981), args=[], opts=[]))]
+        """
+        logger.debug("launching interceptor for %s" % pt_method_name)
+        pt_chain = self.configuration.alias_map[pt_method_name]
+        success = all(r[0] for r in success_list if r[1].name in pt_chain)
+        # failure was already reported by pt_require_child, just return
+        if not success: return
+        socks_interceptor = SOCKSv4InterceptorFactory(pt_method_name,
+                            lambda dest_addr_port, pt_method_name, chain_finished:
+                                self.pt_launch_chain(dest_addr_port, pt_chain, chain_finished, success_list))
+        # TODO switch to using endpoints instead of listenTCP
+        try:
+            interceptor = self.reactor.listenTCP(interface='127.0.0.1', port=0, factory=socks_interceptor)
+            interceptor_port = interceptor.getHost().port
+        except CannotListenError:
+            self.client.reportMethodError(pt_method_name, "failed to launch SOCKS interceptor. The interceptor listenTCP failed.")
+            return
+        self.client.reportMethodSuccess(pt_method_name, "socks4", ("127.0.0.1", interceptor_port))
 
 class Config():
     # Transport map links a pluggable transport name to the a commandline to launch it.
@@ -555,10 +560,9 @@ def main(*args):
     if not client.getTransports():
         logger.error("no transports to serve. pt_method_names may be invalid.")
         return 1
-    pt_method_names = pt_get_unique_transport_list(client.getTransports(), configuration)
     from twisted.internet import reactor
     auto_killall(1, cleanup=reactor.stop)
-    pt_setup_transports(reactor, client, configuration, pt_method_names, client.getTransports())
+    FogClient(reactor, client, configuration).pt_setup_transports()
     reactor.run(installSignalHandlers=0)
     return 0
 
