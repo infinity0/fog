@@ -306,7 +306,6 @@ class FogClient():
         self.reactor = reactor
         self.client = client
         self.configuration = configuration
-        self.pt_method_names = self.pt_get_unique_transport_list()
 
     def __str__(self):
         return "Fog_Client Object with chains %s" % (self.configuration.alias_map.keys(),)
@@ -337,34 +336,31 @@ class FogClient():
             raise ValueError()
         return cmethods[childmethod]
 
-    def pt_get_unique_transport_list(self):
+    def pt_get_unique_cmdline_list(self):
         """
-        Returns all the pts needed by the chains without duplicates
-        :param aliases list: The list of alias names requested by tor and intersected with the transports fog can serve
+        Returns the unique list of command line tuples.
         """
         uniq_transports = set()
         for transport in self.client.getTransports():
-            for pt_name in self.configuration.alias_map[transport]:
-                uniq_transports.add(pt_name)
+            chain = set(self.configuration.alias_map[transport])
+            cmdline_tuples = map(tuple, [self.configuration.transport_map[chain_transport] for chain_transport in chain])
+            uniq_transports.update(cmdline_tuples)
         return list(uniq_transports)
 
     def pt_setup_transports(self):
         """
         Sets up the pluggable transports needed by the chains
         """
-        chain_names = self.client.getTransports()
+        cmdlines = self.pt_get_unique_cmdline_list()
+        all_chains = set(map(tuple, [self.configuration.alias_map[chain_name] for chain_name in self.client.getTransports()]))
         pt_defer_map = {}
-        for pt_name in self.pt_method_names:
-            if pt_name not in self.configuration.transport_map:
-                raise ValueError("Pluggable transport %s not found in transport_map. Check your configuration file." % pt_name)
-            pt_cmdline = self.configuration.transport_map[pt_name]
-            # TODO make this more than a one item list when fixing multiple transports launched by one ClientTransportPlugin line.
-            multi_pts = [pt_name]
-            # Find all the chains where this pt is used.
-            pt_chains = [chain_name for chain_name in chain_names if pt_name in self.configuration.alias_map[chain_name]]
-            _, _, defers = self.pt_launch_child(multi_pts, pt_chains, pt_cmdline)
-            for pt, defer in zip(multi_pts, defers):
-                pt_defer_map[pt] = defer
+        for cmdline in cmdlines:
+            cmd_line_chains = set(map(tuple, self.configuration.chains_by_cmdlines_map[cmdline]))
+            intersected_chains = all_chains & cmd_line_chains
+            pt_names = set([pt_name for chain in intersected_chains for pt_name in chain if tuple(self.configuration.transport_map[pt_name]) == cmdline])
+            _, _, defers = self.pt_launch_child(pt_names, intersected_chains, cmdline)
+            for pt_name, defer in zip(pt_names, defers):
+                pt_defer_map[pt_name] = defer
         chains_finished_dlist = self.pt_setup_chains(pt_defer_map)
         chains_finished_dlist.addCallback(lambda x: self.client.reportMethodsEnd())
 
@@ -482,9 +478,14 @@ class Config():
     # Ex: {'dummy_b64_dummy2' : ['dummy''b64''dummy2']}
     alias_map = None
 
+    # A map of cmdlines to all the chains where it is needed.
+    # Ex: {('obfsproxy', 'managed'): (['b64', 'b64', 'b64', 'b64'], ['b64', 'obfs3'])}
+    chains_by_cmdlines_map = None
+
     def __init__(self, transport_map, alias_map):
         self.transport_map = transport_map
         self.alias_map = alias_map
+        self.chains_by_cmdlines_map = self.map_chains_by_cmdlines()
 
     def __repr__(self):
         return "Config(%s, %s)" % (self.transport_map, self.alias_map)
@@ -524,11 +525,12 @@ class Config():
 
     @classmethod
     def parse_transport_line(cls, transport_map, delimited_tokens, line_counter):
-        transport_name = delimited_tokens[1]
+        transport_names = delimited_tokens[1].split(',')
         transport_cmdline = delimited_tokens[2:]
-        if transport_name in transport_map:
-            raise ValueError('Configuration file has duplicate ClientTransportPlugin lines. Duplicate line is at line number %s' % line_counter)
-        transport_map[transport_name] = transport_cmdline
+        for transport_name in transport_names:
+            if transport_name in transport_map:
+                raise ValueError('Configuration file has duplicate ClientTransportPlugin lines. Duplicate line is at line number %s' % line_counter)
+            transport_map[transport_name] = transport_cmdline
 
     @classmethod
     def parse_alias_line(cls, alias_map, transport_map, delimited_tokens, line_counter):
@@ -540,6 +542,21 @@ class Config():
             if pt_name not in transport_map:
                 raise KeyError('Transport map is missing pluggable transport %s needed for chain %s. Check your configuration file for a ClientTransportPlugin line can launch %s' % (pt_name, alias_name, pt_name))
         alias_map[alias_name] = alias_path
+
+    def map_chains_by_cmdlines(self):
+        """
+        Returns a map of chains by command lines
+        """
+        chains_by_cmdlines_map = {}
+        for chain_name, chain in self.alias_map.items():
+            pts = set(chain)
+            cmdlines = set(map(tuple, [self.transport_map[pt] for pt in pts]))
+            for cmdline in cmdlines:
+                if cmdline in chains_by_cmdlines_map:
+                    chains_by_cmdlines_map[cmdline] = (chain, ) + chains_by_cmdlines_map[cmdline]
+                else:
+                    chains_by_cmdlines_map[cmdline] = (chain, )
+        return chains_by_cmdlines_map
 
 def main(*args):
     parser = argparse.ArgumentParser()
@@ -562,7 +579,8 @@ def main(*args):
         return 1
     from twisted.internet import reactor
     auto_killall(1, cleanup=reactor.stop)
-    FogClient(reactor, client, configuration).pt_setup_transports()
+    fog_instance = FogClient(reactor, client, configuration)
+    fog_instance.pt_setup_transports()
     reactor.run(installSignalHandlers=0)
     return 0
 
