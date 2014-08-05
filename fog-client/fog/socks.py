@@ -33,7 +33,11 @@ class SOCKSv4InterceptorProtocol(socks.SOCKSv4):
                 # Connect to our remote address instead of the requested one
                 d = self.connectClass(remote_addr_port[0], remote_addr_port[1], socks.SOCKSv4Outgoing, self)
                 d.addErrback(lambda result, self = self: self.makeReply(91))
-            self.factory._new_conn_callback((server, port), self._pt_method_name, _chain_set_up)
+            try:
+                self.factory._new_conn_callback((server, port), self._pt_method_name, _chain_set_up)
+            except:
+                self.makeReply(91)
+                raise
             assert self.buf == "", "hmm, still stuff in buffer... %s" % repr(self.buf)
         else:
             super(SOCKSv4InterceptorProtocol, self)._dataReceived2(server, user, version, code, port)
