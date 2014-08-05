@@ -395,8 +395,8 @@ func main() {
 	flag.Usage = usage
 	flag.StringVar(&logFilename, "log", "", "log file to write to")
 	flag.IntVar(&port, "port", 0, "port to listen on if unspecified by Tor")
-	flag.StringVar(&configFilename, "file", "fogrc", "The fog file to read the configuration from.")
-	flag.StringVar(&configFilename, "f", "fogrc", "The fog file to read the configuration from.")
+	flag.StringVar(&configFilename, "file", "./fogrc", "The fog file to read the configuration from.")
+	flag.StringVar(&configFilename, "f", "./fogrc", "The fog file to read the configuration from.")
 	flag.Parse()
 
 	if logFilename != "" {
