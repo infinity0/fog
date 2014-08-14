@@ -14,3 +14,7 @@ Run-time dependencies:
 export GOPATH=$(pwd)
 go get
 make
+
+# To run tests you need to use twisted's trial test suite
+cd ./fog-client
+trial tests
