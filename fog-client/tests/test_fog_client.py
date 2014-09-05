@@ -73,6 +73,21 @@ class ConfigTest(unittest.TestCase):
         """
         self.assertRaises(KeyError, fog_client.Config.parse, test_string)
 
+    def test_map_chains_by_cmdlines(self):
+        test_string = """
+        ClientTransportPlugin obfs3 obfsproxy managed
+        ClientTransportPlugin b64 obfsproxy managed
+        ClientTransportPlugin websocket flashproxy-client --register
+        Alias b64_b64 b64|b64
+        Alias b64_obfs3 b64|obfs3
+        Alias obfs3_websocket obfs3|websocket
+        """
+        config = fog_client.Config.parse(test_string)
+        self.assertEquals(config.map_chains_by_cmdlines(), {
+            ('obfsproxy', 'managed'): (['b64', 'b64'], ['obfs3', 'websocket'], ['b64', 'obfs3']),
+            ('flashproxy-client', '--register'): (['obfs3', 'websocket'],)
+        })
+
 class PTFunctionsTest(unittest.TestCase):
 
     def setUp(self):
@@ -136,6 +151,10 @@ class PTFunctionsTest(unittest.TestCase):
             self.assertTrue((len(addr_port) > 1 and type(addr_port[0]) == str and type(addr_port[1]) == int and addr_port[1] <= 65535))
         self.fog_instance.pt_launch_chain(dest_addr_port, chain, check_addr_port, success_list)
         self.assertTrue(self.test_checked_port)
+
+    def test_pt_get_unique_cmdline_list(self):
+        unique_list = self.fog_instance.pt_get_unique_cmdline_list()
+        self.assertEqual(unique_list, [('obfsproxy', 'managed')])
 
     def tearDown(self):
         os.environ = self.old_environ
