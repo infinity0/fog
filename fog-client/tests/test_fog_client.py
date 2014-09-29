@@ -36,6 +36,18 @@ class ConfigTest(unittest.TestCase):
         self.assertTrue('obfs3' in config.transport_map)
         self.assertEqual(config.transport_map['obfs3'], ['obfsproxy', 'managed'])
 
+    def test_client_line_many_methods(self):
+        """ Config should add multiple comma-separated pts."""
+        test_string = """
+        ClientTransportPlugin b64,obfs3 obfsproxy managed
+        ClientTransportPlugin websocket flashproxy-client --register
+        """
+        config = fog_client.Config.parse(test_string)
+        self.assertTrue('obfs3' in config.transport_map)
+        self.assertEqual(config.transport_map['obfs3'], ['obfsproxy', 'managed'])
+        self.assertTrue('b64' in config.transport_map)
+        self.assertEqual(config.transport_map['b64'], ['obfsproxy', 'managed'])
+
     def test_client_line_duplicates(self):
         """ The config should only store one instance of a transport. If multiple are found it is an error """
         test_string = """
@@ -73,10 +85,9 @@ class ConfigTest(unittest.TestCase):
         """
         self.assertRaises(KeyError, fog_client.Config.parse, test_string)
 
-    def test_map_chains_by_cmdlines(self):
+    def test_map_chains_by_cmdlines_with_c(self):
         test_string = """
-        ClientTransportPlugin obfs3 obfsproxy managed
-        ClientTransportPlugin b64 obfsproxy managed
+        ClientTransportPlugin b64,obfs3 obfsproxy managed
         ClientTransportPlugin websocket flashproxy-client --register
         Alias b64_b64 b64|b64
         Alias b64_obfs3 b64|obfs3
@@ -88,47 +99,62 @@ class ConfigTest(unittest.TestCase):
             ('flashproxy-client', '--register'): (['obfs3', 'websocket'],)
         })
 
+
+PLAIN_CONFIG = """
+ClientTransportPlugin dummy,b64 obfsproxy managed
+Alias b64_dummy b64|dummy
+Alias b64_b64 b64|b64
+"""
+
+PLAIN_ENV = {
+    'TOR_PT_STATE_LOCATION': '.',
+    'TOR_PT_MANAGED_TRANSPORT_VER': '1',
+    'TOR_PT_CLIENT_TRANSPORTS': 'b64_dummy'
+}
+
 class PTFunctionsTest(unittest.TestCase):
 
     def setUp(self):
         """ Set up a fog_client for b64 and dummy transports """
         self.test_checked_port = False
-        test_string = """
-        ClientTransportPlugin dummy obfsproxy managed
-        ClientTransportPlugin b64 obfsproxy managed
-        Alias b64_dummy b64|dummy
-        Alias b64_b64 b64|b64
-        """
         fog_client.pt_setup_logger()
-        PATH = os.getenv('PATH')
         self.old_environ = os.environ.copy()
-        _environ = {'PATH': PATH, 'TOR_PT_STATE_LOCATION': '.', 'TOR_PT_MANAGED_TRANSPORT_VER': '1', 'TOR_PT_CLIENT_TRANSPORTS': 'b64_dummy'}
-        os.environ.update(_environ)
-        configuration = fog_client.Config.parse(test_string)
+        self.fog_instance = None
+
+    def initFogInstance(self, config, environ):
+        os.environ.update(environ)
+        configuration = fog_client.Config.parse(config)
         pt_method_names = configuration.alias_map.keys()
         client = ClientTransportPlugin()
         client.init(pt_method_names) # Initialize our possible methods to all the chains listed by the fog file and stored in alias map.
         if not client.getTransports():
-            fog_client.logger.error("no transports to serve. pt_method_names may be invalid.")
-            return 1
+            raise ValueError("no transports to serve. pt_method_names may be invalid.")
         self.fog_instance = fog_client.FogClient(reactor, client, configuration)
+
+    def tearDown(self):
+        os.environ = self.old_environ
+        self.fog_instance.reactor.removeAll()
 
     def test_pt_launch_child(self):
         """ All launched transports should callback when completed """
+        self.initFogInstance(PLAIN_CONFIG, PLAIN_ENV)
         sub_proc, sub_protocol, methoddefers = self.fog_instance.pt_launch_child(('obfs3',), (['obfs3', 'b64'],), ('obfsproxy', 'managed'))
         return defer.DeferredList(methoddefers)
 
     def test_pt_require_child_cmethods_ok(self):
         """ Check that pt_require_child can extract the correct cmethod """
+        self.initFogInstance(PLAIN_CONFIG, PLAIN_ENV)
         cmethod = fog_client.MethodSpec(name='obfs3', protocol='socks4', addrport=('127.0.0.1', 65261), args=[], opts=[])
         self.assertEqual(self.fog_instance.pt_require_child('dummy', (['b64', 'dummy'],), {'dummy': cmethod}), cmethod)
 
     def test_pt_require_child_cmethods_bad(self):
         """ If a cmethod does not exist and is requested, pt_require_child should error """
+        self.initFogInstance(PLAIN_CONFIG, PLAIN_ENV)
         self.assertRaises(ValueError, self.fog_instance.pt_require_child, 'obfs3', (['obfs3', 'flashproxy'],), {})
 
     def test_pt_setup_socks_shim(self):
         """ Successful launching a socks shim and that the proxy_deferreds list is added to by pt_setup_socks_shim """
+        self.initFogInstance(PLAIN_CONFIG, PLAIN_ENV)
         proxy_deferreds = []
         fact = HTTPFactory()
         test_listening_port = reactor.listenTCP(interface='127.0.0.1', port=0, factory=fact)
@@ -143,6 +169,7 @@ class PTFunctionsTest(unittest.TestCase):
 
     def test_pt_launch_chain(self):
         """ Launch chain successfully and check if it returns a correct addr_port """
+        self.initFogInstance(PLAIN_CONFIG, PLAIN_ENV)
         dest_addr_port = ('127.0.0.1', 2401)
         chain = ['b64', 'b64', 'b64', 'b64']
         success_list = [(True, fog_client.MethodSpec(name='b64', protocol='socks4', addrport=('127.0.0.1', 53269), args=[], opts=[]))]
@@ -153,12 +180,26 @@ class PTFunctionsTest(unittest.TestCase):
         self.assertTrue(self.test_checked_port)
 
     def test_pt_get_unique_cmdline_list(self):
+        """ Check that we only expect to launch one PT """
+        self.initFogInstance(PLAIN_CONFIG, PLAIN_ENV)
         unique_list = self.fog_instance.pt_get_unique_cmdline_list()
         self.assertEqual(unique_list, [('obfsproxy', 'managed')])
 
-    def tearDown(self):
-        os.environ = self.old_environ
-        self.fog_instance.reactor.removeAll()
+    def test_pt_get_unique_cmdline_list_over(self):
+        """ Check that we only expect to launch the one PT that was asked ."""
+        self.initFogInstance("""
+            ClientTransportPlugin dummy,b64 obfsproxy managed
+            ClientTransportPlugin websocket flashproxy-client --register
+            Alias b64_dummy b64|dummy
+            Alias b64_b64 b64|b64
+        """, {
+            'TOR_PT_STATE_LOCATION': '.',
+            'TOR_PT_MANAGED_TRANSPORT_VER': '1',
+            'TOR_PT_CLIENT_TRANSPORTS': 'b64_dummy,b64_b64'
+        })
+        unique_list = self.fog_instance.pt_get_unique_cmdline_list()
+        self.assertEqual(unique_list, [('obfsproxy', 'managed')])
+
 
 if __name__ == '__main__':
     unittest.main()
